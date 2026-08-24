@@ -1,0 +1,11 @@
+.git
+.github
+*.md
+__pycache__
+models
+config
+.venv
+venv
+*.wav
+*.pt
+*.safetensors

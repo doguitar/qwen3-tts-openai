@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+soundfile
+numpy
+librosa
+safetensors
+einops
+qwen-omni-utils
+transformers==4.57.6
+qwen-tts==0.1.1
