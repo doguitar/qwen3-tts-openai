@@ -12,16 +12,43 @@ import io
 import json
 import os
 import re
+import subprocess
 import threading
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+OPENAI_STOCK_VOICES = {
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "onyx",
+    "nova",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+}
+
+AUDIO_FORMATS = {
+    "wav": ("audio/wav", ["-f", "wav", "-acodec", "pcm_s16le"]),
+    "mp3": ("audio/mpeg", ["-f", "mp3", "-acodec", "libmp3lame", "-q:a", "2"]),
+    "opus": ("audio/opus", ["-f", "opus"]),
+    "aac": ("audio/aac", ["-f", "adts", "-acodec", "aac"]),
+    "flac": ("audio/flac", ["-f", "flac"]),
+    "pcm": ("application/octet-stream", None),
+}
 
 HOST = os.environ.get("TTS_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TTS_PORT", "8080"))
@@ -49,14 +76,26 @@ ready_error: str | None = None
 
 
 class OpenAISpeechRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input: str = ""
     text: str = ""
-    voice: str = ""
+    voice: Any = ""
     model: str = ""
     instructions: str | None = None
     language: str | None = None
-    response_format: str = "wav"
+    response_format: str = "mp3"
     speed: float | None = None
+    stream_format: str | None = None
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def coerce_voice(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            return str(value.get("id") or value.get("voice") or value.get("name") or "")
+        return str(value)
 
 
 def speaker_key(value: str) -> str:
@@ -96,17 +135,41 @@ def load_voice_map(supported: list[str]) -> dict[str, str]:
     return mapping
 
 
-def resolve_voice(name: str | None) -> str:
+def resolve_voice(name: str | None) -> tuple[str, bool, str]:
     key = (name or "").strip().lower()
-    if not key:
-        return default_voice
+    if not key or key in OPENAI_STOCK_VOICES:
+        reason = "empty voice" if not key else f"openai stock voice {key}"
+        return default_voice, bool(key), reason
     if key in speakers:
-        return speakers[key]
+        return speakers[key], False, ""
     wanted = speaker_key(key)
     for alias, real in speakers.items():
         if speaker_key(alias) == wanted or speaker_key(real) == wanted:
-            return real
-    raise HTTPException(status_code=400, detail=f"unknown voice {name!r}; known: {sorted(speakers)}")
+            return real, False, ""
+    return default_voice, True, f"unknown voice {name!r}; using {default_voice}"
+
+
+def encode_audio(audio: np.ndarray, sr: int, fmt: str) -> tuple[bytes, str]:
+    fmt = (fmt or "mp3").lower().strip()
+    if fmt not in AUDIO_FORMATS:
+        fmt = "mp3"
+    media, ffmpeg_args = AUDIO_FORMATS[fmt]
+    wav = wav_bytes(audio, sr)
+    if fmt == "wav":
+        return wav, media
+    if fmt == "pcm":
+        pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+        return pcm, media
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", *ffmpeg_args, "pipe:1"],
+        input=wav,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        print(f"ffmpeg {fmt} failed: {proc.stderr.decode('utf-8', 'replace')}", flush=True)
+        return wav, "audio/wav"
+    return proc.stdout, media
 
 
 def ensure_tokenizer_weights(model_dir: Path) -> None:
@@ -190,17 +253,29 @@ def openai_models():
     }
 
 
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    print(f"unhandled {request.method} {request.url.path}: {exc!r}", flush=True)
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
 @app.post("/v1/audio/speech")
-def openai_speech(req: OpenAISpeechRequest):
+async def openai_speech(request: Request, req: OpenAISpeechRequest):
     if engine is None:
         raise HTTPException(status_code=503, detail=ready_error or "loading")
     text = (req.input or req.text or "").strip()
     if not text:
+        raw = await request.body()
+        print(f"400 empty input body={raw[:2000]!r}", flush=True)
         raise HTTPException(status_code=400, detail="empty input")
-    fmt = (req.response_format or "wav").lower()
-    if fmt not in {"wav", "pcm"}:
-        raise HTTPException(status_code=400, detail="only wav and pcm are supported")
-    speaker = resolve_voice(req.voice)
+    fmt = (req.response_format or "mp3").lower().strip()
+    speaker, fell_back, reason = resolve_voice(str(req.voice or ""))
+    print(
+        f"speech voice={req.voice!r} -> {speaker} format={fmt} chars={len(text)} fallback={fell_back}",
+        flush=True,
+    )
     language = req.language or DEFAULT_LANGUAGE
     with lock:
         wavs, sr = engine.generate_custom_voice(
@@ -210,10 +285,12 @@ def openai_speech(req: OpenAISpeechRequest):
             instruct=req.instructions,
         )
         audio = np.asarray(wavs[0], dtype=np.float32)
-    if fmt == "pcm":
-        pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
-        return Response(content=pcm, media_type="application/octet-stream", headers={"X-TTS-Voice-Used": speaker})
-    return Response(content=wav_bytes(audio, sr), media_type="audio/wav", headers={"X-TTS-Voice-Used": speaker})
+    body, media = encode_audio(audio, sr, fmt)
+    headers = {"X-TTS-Voice-Used": speaker}
+    if fell_back:
+        headers["X-TTS-Fell-Back"] = "1"
+        headers["X-TTS-Fell-Back-Reason"] = reason
+    return Response(content=body, media_type=media, headers=headers)
 
 
 if __name__ == "__main__":
