@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>qwen3-tts-openai</Name>
+  <Repository>ghcr.io/doguitar/qwen3-tts-openai:latest</Repository>
+  <Registry>https://github.com/users/doguitar/packages/container/package/qwen3-tts-openai</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/doguitar/qwen3-tts-openai/issues</Support>
+  <Project>https://github.com/doguitar/qwen3-tts-openai</Project>
+  <Overview>OpenAI-compatible TTS for one multi-speaker Qwen3 fine-tune. Mount your EasyFinetuning checkpoint at /models and pick the speaker with JSON voice (serling, mark, sinatra). Subwave Cloud URL is http://[IP]:8080/v1. This is not Faster-Qwen3-TTS-Wyoming and will not load stock CustomVoice Hugging Face ids.</Overview>
+  <Category>AI: HomeAutomation:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/health</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/doguitar/qwen3-tts-openai/main/unraid/qwen3-tts-openai.xml</TemplateURL>
+  <Icon>https://avatars.githubusercontent.com/u/1200188?v=4</Icon>
+  <ExtraParams>--runtime=nvidia --gpus all</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Unraid 6.12+, NVIDIA Driver plugin, NVIDIA Container Toolkit. GHCR packages start private: docker login ghcr.io, or set the package public. Copy your SFT checkpoint into /mnt/user/appdata/qwen3-tts-openai/models before starting (see unraid/download-models.sh).</Requires>
+  <Config Name="API Port" Target="8080" Default="8080" Mode="tcp" Description="OpenAI /v1/audio/speech listen port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Models" Target="/models" Default="/mnt/user/appdata/qwen3-tts-openai/models" Mode="ro" Description="Fine-tune checkpoint (model.safetensors + speech_tokenizer)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/qwen3-tts-openai/models</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/qwen3-tts-openai/config" Mode="rw" Description="Optional voices.json" Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/qwen3-tts-openai/config</Config>
+  <Config Name="TTS_MODEL" Target="TTS_MODEL" Default="/models" Mode="" Description="Checkpoint path inside the container" Type="Variable" Display="advanced" Required="false" Mask="false">/models</Config>
+  <Config Name="TTS_DEVICE" Target="TTS_DEVICE" Default="cuda:0" Mode="" Description="Inference device (cuda:0 or cpu)" Type="Variable" Display="always" Required="false" Mask="false">cuda:0</Config>
+  <Config Name="TTS_SPEAKERS" Target="TTS_SPEAKERS" Default="serling" Mode="" Description="Comma-separated speaker names in the fine-tune" Type="Variable" Display="always" Required="false" Mask="false">serling</Config>
+  <Config Name="TTS_DEFAULT_VOICE" Target="TTS_DEFAULT_VOICE" Default="serling" Mode="" Description="Voice used when the request omits voice" Type="Variable" Display="always" Required="false" Mask="false">serling</Config>
+  <Config Name="TTS_VOICES" Target="TTS_VOICES" Default="/config/voices.json" Mode="" Description="Optional name-to-speaker map" Type="Variable" Display="advanced" Required="false" Mask="false">/config/voices.json</Config>
+  <Config Name="TTS_LANGUAGE" Target="TTS_LANGUAGE" Default="English" Mode="" Description="Default synthesis language" Type="Variable" Display="advanced" Required="false" Mask="false">English</Config>
+  <Config Name="TTS_MODEL_NAME" Target="TTS_MODEL_NAME" Default="tts-1" Mode="" Description="OpenAI model id returned by GET /v1/models" Type="Variable" Display="advanced" Required="false" Mask="false">tts-1</Config>
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="GPU visibility" Type="Variable" Display="advanced" Required="false" Mask="false">all</Config>
+  <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="NVIDIA driver capabilities" Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility</Config>
+</Container>

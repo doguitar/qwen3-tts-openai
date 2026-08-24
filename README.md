@@ -51,6 +51,50 @@ Speakers are discovered from the checkpoint. Override with env or `/config/voice
 }
 ```
 
+## Unraid
+
+Template: [`unraid/qwen3-tts-openai.xml`](unraid/qwen3-tts-openai.xml)
+
+**1. On Unraid (SSH or User Scripts)** — pull the image and Hugging Face tokenizer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/doguitar/qwen3-tts-openai/main/unraid/download-models.sh -o /tmp/download-models.sh
+chmod +x /tmp/download-models.sh
+# If GHCR is still private:
+export GITHUB_TOKEN=ghp_your_pat_with_read_packages
+export GHCR_USER=doguitar
+bash /tmp/download-models.sh
+```
+
+That writes `/mnt/user/appdata/qwen3-tts-openai/{models,config}` and downloads `Qwen/Qwen3-TTS-12Hz-0.6B-Base` tokenizer files. It does **not** download your Serling/Mark/Sinatra fine-tune (that lives on the training disk).
+
+**2. On the Windows training PC** — copy the checkpoint (skips `training_state.pt`):
+
+```powershell
+# edit \\tower if your Unraid hostname/share differs
+.\unraid\copy-checkpoint.ps1 -UnraidShare "\\tower\appdata\qwen3-tts-openai\models"
+```
+
+Or from Unraid if the share is already mounted:
+
+```bash
+rsync -av --exclude training_state.pt /path/to/checkpoint-epoch-2/ /mnt/user/appdata/qwen3-tts-openai/models/
+```
+
+**3. Install the template:**
+
+```bash
+mkdir -p /boot/config/plugins/dockerMan/templates-user
+curl -fsSL https://raw.githubusercontent.com/doguitar/qwen3-tts-openai/main/unraid/qwen3-tts-openai.xml \
+  -o /boot/config/plugins/dockerMan/templates-user/my-qwen3-tts-openai.xml
+```
+
+Docker tab → Add Container → Template **qwen3-tts-openai**. Extra params already include `--runtime=nvidia --gpus all`.
+
+Today’s Serling-only checkpoint: set `TTS_SPEAKERS=serling` and `TTS_DEFAULT_VOICE=serling`. After a multi-speaker train, change those to `serling,mark,sinatra`.
+
+Subwave Cloud: `http://UNRAID-LAN-OR-TAILSCALE-IP:8080/v1`, model `tts-1`, voice `serling`.
+
 ## docker run (Unraid / NVIDIA)
 
 Packages are published by GitHub Actions on push to `main`.
