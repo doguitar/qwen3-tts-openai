@@ -2,6 +2,8 @@
 
 Docker image that serves **one multi-speaker Qwen3-TTS fine-tune** behind an OpenAI-compatible API.
 
+Build note: `qwen-tts==0.1.1` requires **`transformers==4.57.3`** (not 4.57.6) plus OS `sox`. The image is CUDA 12.4 + Torch 2.5.1 cu124.
+
 Image: `ghcr.io/doguitar/qwen3-tts-openai`
 
 This is not llama.cpp and not Faster-Qwen3-TTS-Wyoming. Mount your EasyFinetuning checkpoint (several speakers in one `model.safetensors`) and pick the speaker with the `voice` field.
