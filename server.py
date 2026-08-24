@@ -22,8 +22,9 @@ import soundfile as sf
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 OPENAI_STOCK_VOICES = {
     "alloy",
@@ -73,6 +74,42 @@ engine = None
 speakers: dict[str, str] = {}
 default_voice = ""
 ready_error: str | None = None
+BODY_LOG_LIMIT = int(os.environ.get("TTS_LOG_BODY_LIMIT", "8000"))
+
+
+def preview_body(raw: bytes | None) -> str:
+    text = (raw or b"").decode("utf-8", "replace")
+    if len(text) > BODY_LOG_LIMIT:
+        return text[:BODY_LOG_LIMIT] + "...(truncated)"
+    return text
+
+
+def log_api_error(request: Request, status: int, detail: Any) -> None:
+    raw = getattr(request.state, "raw_body", b"")
+    print(
+        f"API error {request.method} {request.url.path} status={status} "
+        f"detail={detail!r} body={preview_body(raw)!r}",
+        flush=True,
+    )
+
+
+@app.middleware("http")
+async def capture_request_body(request: Request, call_next):
+    raw = await request.body()
+
+    async def receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    request = Request(request.scope, receive)
+    request.state.raw_body = raw
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        log_api_error(request, 500, repr(exc))
+        raise
+    if response.status_code >= 400:
+        log_api_error(request, response.status_code, f"http {response.status_code}")
+    return response
 
 
 class OpenAISpeechRequest(BaseModel):
@@ -232,6 +269,7 @@ def health():
     }
 
 
+@app.get("/v1/audio/voices")
 @app.get("/v1/voices")
 def openai_voices():
     names = sorted(set(speakers.values()))
@@ -253,13 +291,22 @@ def openai_models():
     }
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    log_api_error(request, 422, exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, exc: HTTPException):
+    log_api_error(request, exc.status_code, exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception):
-    print(f"unhandled {request.method} {request.url.path}: {exc!r}", flush=True)
-    if isinstance(exc, HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    log_api_error(request, 500, repr(exc))
     return JSONResponse(status_code=500, content={"detail": str(exc)})
-
 
 @app.post("/v1/audio/speech")
 async def openai_speech(request: Request, req: OpenAISpeechRequest):
@@ -267,8 +314,6 @@ async def openai_speech(request: Request, req: OpenAISpeechRequest):
         raise HTTPException(status_code=503, detail=ready_error or "loading")
     text = (req.input or req.text or "").strip()
     if not text:
-        raw = await request.body()
-        print(f"400 empty input body={raw[:2000]!r}", flush=True)
         raise HTTPException(status_code=400, detail="empty input")
     fmt = (req.response_format or "mp3").lower().strip()
     speaker, fell_back, reason = resolve_voice(str(req.voice or ""))

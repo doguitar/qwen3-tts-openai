@@ -1,8 +1,9 @@
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
     TTS_HOST=0.0.0.0 \
     TTS_PORT=8080 \
     TTS_MODEL=/models \
@@ -15,11 +16,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
-        python3-venv \
         ffmpeg \
         libsndfile1 \
         sox \
-        libsox-dev \
         ca-certificates \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
@@ -27,12 +26,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# Install CUDA torch first so pip does not replace it with a CPU wheel.
-RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir \
+# CUDA kernels live in the torch wheels. Drop the nvidia/cuda base (duplicate
+# ~700MB) and skip Gradio (qwen-tts UI, not used by this API).
+RUN pip3 install --upgrade pip \
+    && pip3 install \
         torch==2.5.1 torchaudio==2.5.1 \
         --index-url https://download.pytorch.org/whl/cu124 \
-    && pip3 install --no-cache-dir -r requirements.txt
+    && pip3 uninstall -y nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-cuda-cupti-cu12 || true
+
+RUN pip3 install --no-deps qwen-tts==0.1.1 \
+    && pip3 install -r requirements.txt \
+    && pip3 uninstall -y gradio gradio-client hf-gradio groovy || true \
+    && find /usr/local/lib -type d -name __pycache__ -exec rm -rf {} + \
+    && find /usr/local/lib -type d -name tests -exec rm -rf {} + \
+    && find /usr/local/lib -type d -name test -exec rm -rf {} + \
+    && rm -rf /root/.cache /tmp/*
 
 COPY server.py /app/server.py
 COPY voices.example.json /app/voices.example.json

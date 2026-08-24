@@ -2,7 +2,7 @@
 
 Docker image that serves **one multi-speaker Qwen3-TTS fine-tune** behind an OpenAI-compatible API.
 
-Build note: `qwen-tts==0.1.1` requires **`transformers==4.57.3`** (not 4.57.6) plus OS `sox`. The image is CUDA 12.4 + Torch 2.5.1 cu124.
+Build note: `qwen-tts==0.1.1` requires **`transformers==4.57.3`** plus OS `sox`. Image is Ubuntu 22.04 + Torch 2.5.1 cu124 (CUDA is inside the torch wheels; Gradio is not installed). API errors log the JSON body.
 
 Image: `ghcr.io/doguitar/qwen3-tts-openai`
 
