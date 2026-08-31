@@ -90,7 +90,7 @@ docker run -d --name qwen3-tts-openai \
   ghcr.io/doguitar/qwen3-tts-openai:xpu
 ```
 
-Host needs a kernel/driver that sees the Arc GPU (`i915` or `xe`). In the container, `/health` should report `"device": "xpu"` and an `xpu_name` such as `Intel(R) Arc(TM) A380 Graphics`. Auto-detect order when `TTS_DEVICE` is unset: CUDA, then XPU, then CPU.
+Host needs a kernel/driver that sees the Arc GPU (`i915` or `xe`) and **Resizable BAR** (Above 4G Decoding + Re-Size BAR in BIOS). A 256MB BAR is not enough: `torch.xpu` may list the GPU, then kernels fail with `could not make an engine with allocator` or SIGSEGV in `libze_intel_gpu`. `lspci -vv` should show BAR 2 at 4GB–8GB, not 256MB. In the container, `/health` should report `"device": "xpu"` and an `xpu_name` such as `Intel(R) Arc(TM) A380 Graphics`. Auto-detect order when `TTS_DEVICE` is unset: CUDA, then XPU, then CPU.
 
 Private GHCR packages need `docker login ghcr.io`. The package can be set public in GitHub: **Packages → qwen3-tts-openai → Package settings**.
 
@@ -100,7 +100,7 @@ Template: [`unraid/qwen3-tts-openai.xml`](unraid/qwen3-tts-openai.xml)
 
 Copy it to `/boot/config/plugins/dockerMan/templates-user/` and add the container from the Docker tab. Extra params include `--runtime=nvidia --gpus all`.
 
-Intel Arc: [`unraid/qwen3-tts-openai-xpu.xml`](unraid/qwen3-tts-openai-xpu.xml) (`:xpu` image, `--device=/dev/dri`, `TTS_DEVICE=xpu`). Unraid 7.0+ is the realistic floor for Alchemist.
+Intel Arc: [`unraid/qwen3-tts-openai-xpu.xml`](unraid/qwen3-tts-openai-xpu.xml) (`:xpu` image, `--device=/dev/dri --group-add 18`, `TTS_DEVICE=xpu`). Unraid 7.0+ is the realistic floor for Alchemist. Enable Resizable BAR in BIOS; 256MB BAR 2 will not run XPU inference.
 
 Host paths:
 

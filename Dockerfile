@@ -33,19 +33,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Intel Level Zero / OpenCL userspace for Arc (A380 Alchemist and later).
-# Host still needs the i915/xe kernel driver; pass --device /dev/dri at runtime.
+# Host still needs the i915/xe kernel driver and Resizable BAR; pass --device /dev/dri.
+# libze-intel-gpu1 Breaks: intel-level-zero-gpu — install only the former.
 RUN if [ "$TORCH_BACKEND" = "xpu" ]; then \
         . /etc/os-release; \
         wget -qO - https://repositories.intel.com/gpu/intel-graphics.key \
             | gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics.gpg \
         && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME} client" \
             > /etc/apt/sources.list.d/intel-gpu.list \
-        || true; \
-        apt-get update; \
-        apt-get install -y --no-install-recommends clinfo intel-opencl-icd || true; \
-        apt-get install -y --no-install-recommends libze1 || true; \
-        apt-get install -y --no-install-recommends libze-intel-gpu1 intel-level-zero-gpu level-zero || true; \
-        rm -rf /var/lib/apt/lists/*; \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends \
+            clinfo \
+            intel-opencl-icd \
+            libze1 \
+            libze-intel-gpu1 \
+        && rm -rf /var/lib/apt/lists/*; \
     fi
 
 WORKDIR /app
