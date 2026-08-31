@@ -2,7 +2,7 @@
 
 Docker image that serves one multi-speaker [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) fine-tune behind an OpenAI-compatible API.
 
-Image: `ghcr.io/doguitar/qwen3-tts-openai`
+Images: `ghcr.io/doguitar/qwen3-tts-openai:latest` (NVIDIA CUDA) and `:xpu` (Intel Arc / XPU).
 
 Mount a local EasyFinetuning checkpoint at `/models`. The `voice` field in `/v1/audio/speech` selects a speaker from that checkpoint.
 
@@ -75,6 +75,23 @@ docker run -d --name qwen3-tts-openai \
   ghcr.io/doguitar/qwen3-tts-openai:latest
 ```
 
+Intel Arc (A380 / Alchemist and later). Use the `:xpu` image, not `:latest`. The CUDA wheels have no `torch.xpu`. Pass the render node; `--gpus all` is NVIDIA-only. A380 is 6GB: use the 0.6B fine-tune and FP16 (the default on XPU).
+
+```bash
+docker run -d --name qwen3-tts-openai \
+  --device /dev/dri \
+  --group-add $(stat -c '%g' /dev/dri/renderD128) \
+  -p 8080:8080 \
+  -e TTS_DEVICE=xpu \
+  -e TTS_DEFAULT_VOICE=alice \
+  -e TTS_SPEAKERS=alice,bob \
+  -v /path/to/checkpoint:/models:ro \
+  -v /path/to/config:/config:ro \
+  ghcr.io/doguitar/qwen3-tts-openai:xpu
+```
+
+Host needs a kernel/driver that sees the Arc GPU (`i915` or `xe`). In the container, `/health` should report `"device": "xpu"` and an `xpu_name` such as `Intel(R) Arc(TM) A380 Graphics`. Auto-detect order when `TTS_DEVICE` is unset: CUDA, then XPU, then CPU.
+
 Private GHCR packages need `docker login ghcr.io`. The package can be set public in GitHub: **Packages → qwen3-tts-openai → Package settings**.
 
 ## Unraid
@@ -82,6 +99,8 @@ Private GHCR packages need `docker login ghcr.io`. The package can be set public
 Template: [`unraid/qwen3-tts-openai.xml`](unraid/qwen3-tts-openai.xml)
 
 Copy it to `/boot/config/plugins/dockerMan/templates-user/` and add the container from the Docker tab. Extra params include `--runtime=nvidia --gpus all`.
+
+Intel Arc: [`unraid/qwen3-tts-openai-xpu.xml`](unraid/qwen3-tts-openai-xpu.xml) (`:xpu` image, `--device=/dev/dri`, `TTS_DEVICE=xpu`). Unraid 7.0+ is the realistic floor for Alchemist.
 
 Host paths:
 
@@ -97,7 +116,8 @@ OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = a spe
 | Variable | Default | Meaning |
 |---|---|---|
 | `TTS_MODEL` | `/models` | Fine-tune checkpoint directory |
-| `TTS_DEVICE` | `cuda:0` if GPU else `cpu` | Inference device |
+| `TTS_DEVICE` | `cuda:0`, else `xpu`, else `cpu` | Inference device (`cuda:0`, `xpu`, `cpu`) |
+| `TTS_DTYPE` | `bfloat16` on CUDA, `float16` on XPU, `float32` on CPU | Override torch dtype |
 | `TTS_SPEAKERS` | *(from checkpoint)* | Comma-separated speaker names |
 | `TTS_DEFAULT_VOICE` | first speaker | Empty or unknown `voice` in the request |
 | `TTS_VOICES` | `/config/voices.json` | Optional name → speaker map |
@@ -108,8 +128,9 @@ OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = a spe
 
 ## Build
 
-`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. The image is Ubuntu 22.04 with Torch 2.5.1 cu124 (CUDA libraries come from the torch wheels). Gradio is not installed.
+`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. Default image: Ubuntu 22.04, Torch 2.5.1 cu124 (CUDA libraries come from the torch wheels). Gradio is not installed. XPU image: same base, official PyTorch `whl/xpu` wheels, Intel Level Zero userspace.
 
 ```bash
 docker build -t qwen3-tts-openai:local .
+docker build --build-arg TORCH_BACKEND=xpu -t qwen3-tts-openai:xpu .
 ```

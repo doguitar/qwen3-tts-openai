@@ -17,6 +17,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
+# Level Zero must be configured before torch.xpu initializes (Arc A380 / Alchemist).
+os.environ.setdefault("ZE_FLAT_DEVICE_HIERARCHY", "FLAT")
+os.environ.setdefault("SYCL_CACHE_PERSISTENT", "1")
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -25,6 +29,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from device import inference_settings, select_device
 
 OPENAI_STOCK_VOICES = {
     "alloy",
@@ -59,14 +65,28 @@ DEFAULT_LANGUAGE = os.environ.get("TTS_LANGUAGE", "English")
 MODEL_NAME = os.environ.get("TTS_MODEL_NAME", "tts-1")
 
 
+def xpu_available() -> bool:
+    xpu = getattr(torch, "xpu", None)
+    try:
+        return bool(xpu is not None and xpu.is_available())
+    except Exception:
+        return False
+
+
 def pick_device() -> str:
-    requested = os.environ.get("TTS_DEVICE", "").strip()
-    if requested:
-        return requested
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
+    return select_device(os.environ.get("TTS_DEVICE", ""), torch.cuda.is_available(), xpu_available())
+
+
+def xpu_device_name(device: str) -> str | None:
+    if not str(device).startswith("xpu") or not xpu_available():
+        return None
+    index = int(device.split(":", 1)[1]) if ":" in device else 0
+    return torch.xpu.get_device_name(index)
 
 
 DEVICE = pick_device()
+DTYPE_NAME, ATTN = inference_settings(DEVICE, os.environ.get("TTS_DTYPE", ""))
+DTYPE = getattr(torch, DTYPE_NAME)
 
 app = FastAPI(title="Qwen3 TTS OpenAI")
 lock = threading.Lock()
@@ -240,12 +260,11 @@ def startup() -> None:
         ready_error = f"model path missing: {model_dir}"
         raise RuntimeError(ready_error)
     ensure_tokenizer_weights(model_dir)
-    use_cuda = str(DEVICE).startswith("cuda")
     engine = Qwen3TTSModel.from_pretrained(
         str(model_dir),
         device_map=DEVICE,
-        torch_dtype=torch.bfloat16 if use_cuda else torch.float32,
-        attn_implementation="sdpa" if use_cuda else "eager",
+        torch_dtype=DTYPE,
+        attn_implementation=ATTN,
     )
     supported = []
     if hasattr(engine, "get_supported_speakers"):
@@ -253,20 +272,31 @@ def startup() -> None:
     speakers = load_voice_map(supported)
     env_default = os.environ.get("TTS_DEFAULT_VOICE", "").strip().lower()
     default_voice = speakers.get(env_default) if env_default in speakers else next(iter(speakers.values()))
-    print(f"device={DEVICE} voices={sorted(speakers)} default={default_voice}", flush=True)
+    xpu_name = xpu_device_name(DEVICE)
+    print(
+        f"device={DEVICE} dtype={DTYPE_NAME} attn={ATTN} xpu={xpu_name!r} "
+        f"voices={sorted(speakers)} default={default_voice}",
+        flush=True,
+    )
 
 
 @app.get("/health")
 def health():
     if engine is None:
         return {"ok": False, "error": ready_error or "loading"}
-    return {
+    payload = {
         "ok": True,
         "voices": sorted(set(speakers.values())),
         "default": default_voice,
         "device": DEVICE,
+        "dtype": DTYPE_NAME,
+        "attn": ATTN,
         "model": str(MODEL_PATH),
     }
+    xpu_name = xpu_device_name(DEVICE)
+    if xpu_name:
+        payload["xpu_name"] = xpu_name
+    return payload
 
 
 @app.get("/v1/audio/voices")
