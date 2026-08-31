@@ -8,7 +8,7 @@ set -euo pipefail
 APPDATA="${APPDATA:-/mnt/user/appdata/qwen3-tts-openai}"
 MODELS="${APPDATA}/models"
 CONFIG="${APPDATA}/config"
-IMAGE="${IMAGE:-ghcr.io/doguitar/qwen3-tts-openai:latest}"  # Intel Arc: IMAGE=ghcr.io/doguitar/qwen3-tts-openai:xpu
+IMAGE="${IMAGE:-ghcr.io/doguitar/qwen3-tts-openai:latest}"  # CPU. NVIDIA: IMAGE=...:cuda  Intel Arc: IMAGE=...:xpu
 HF_MODEL="${HF_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-Base}"
 GHCR_USER="${GHCR_USER:-doguitar}"
 

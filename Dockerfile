@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=ubuntu:22.04
 FROM ${BASE_IMAGE}
 
-ARG TORCH_BACKEND=cuda
+ARG TORCH_BACKEND=cpu
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -53,9 +53,9 @@ RUN if [ "$TORCH_BACKEND" = "xpu" ]; then \
 WORKDIR /app
 COPY requirements.txt .
 
-# CUDA kernels live in the torch wheels. Drop the nvidia/cuda base (duplicate
-# ~700MB) and skip Gradio (qwen-tts UI, not used by this API).
-# XPU: official PyTorch Intel GPU wheels (Arc A-series, including A380).
+# Torch wheels: cpu (default, :latest), cuda (cu124), or xpu (Intel Arc).
+# CUDA kernels live in the torch wheels — no nvidia/cuda base image.
+# Skip Gradio (qwen-tts UI, not used by this API).
 RUN pip3 install --upgrade pip \
     && if [ "$TORCH_BACKEND" = "xpu" ]; then \
         pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/xpu; \
