@@ -87,7 +87,7 @@ docker run -d --name qwen3-tts-openai \
   ghcr.io/doguitar/qwen3-tts-openai:cuda
 ```
 
-Intel Arc (A380 / Alchemist and later). Use the `:xpu` image. The CUDA and CPU wheels have no `torch.xpu`. Pass the render node; `--gpus all` is NVIDIA-only. A380 is 6GB: use the 0.6B fine-tune and FP16 (the default on XPU).
+Intel Arc (A380 / Alchemist and later). Use the `:xpu` image. The CUDA and CPU wheels have no `torch.xpu`. Pass the render node; `--gpus all` is NVIDIA-only. A380 is 6GB: use the 0.6B fine-tune. Default dtype is float32; float16 loads then crashes in `torch._assert_async` on torch 2.13+xpu.
 
 ```bash
 docker run -d --name qwen3-tts-openai \
@@ -102,7 +102,7 @@ docker run -d --name qwen3-tts-openai \
   ghcr.io/doguitar/qwen3-tts-openai:xpu
 ```
 
-Host needs a kernel/driver that sees the Arc GPU (`i915` or `xe`) and **Resizable BAR** (Above 4G Decoding + Re-Size BAR in BIOS). A 256MB BAR is not enough: `torch.xpu` may list the GPU, then kernels fail with `could not make an engine with allocator` or SIGSEGV in `libze_intel_gpu`. `lspci -vv` should show BAR 2 at 4GB–8GB, not 256MB. In the container, `/health` should report `"device": "xpu"` and an `xpu_name` such as `Intel(R) Arc(TM) A380 Graphics`. Auto-detect order when `TTS_DEVICE` is unset: CUDA, then XPU, then CPU.
+Host needs a kernel/driver that sees the Arc GPU (`i915` or `xe`) and **Resizable BAR** (Above 4G Decoding + Re-Size BAR in BIOS). A 256MB BAR is not enough: `torch.xpu` may list the GPU, then kernels fail with `could not make an engine with allocator` or SIGSEGV in `libze_intel_gpu`. `lspci -vv` should show BAR 2 at 4GB–8GB, not 256MB. The `:xpu` image must use Intel's Ubuntu **unified** GPU apt channel (`libze-intel-gpu1` 25.18+). The older **client** channel (24.39 on jammy) produces the same allocator error even with an 8GB BAR. In the container, `/health` should report `"device": "xpu"` and an `xpu_name` such as `Intel(R) Arc(TM) A380 Graphics`. Auto-detect order when `TTS_DEVICE` is unset: CUDA, then XPU, then CPU.
 
 Private GHCR packages need `docker login ghcr.io`. The package can be set public in GitHub: **Packages → qwen3-tts-openai → Package settings**.
 
@@ -129,7 +129,7 @@ OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = a spe
 |---|---|---|
 | `TTS_MODEL` | `/models` | Fine-tune checkpoint directory |
 | `TTS_DEVICE` | `cuda:0`, else `xpu`, else `cpu` | Inference device (`cuda:0`, `xpu`, `cpu`) |
-| `TTS_DTYPE` | `bfloat16` on CUDA, `float16` on XPU, `float32` on CPU | Override torch dtype |
+| `TTS_DTYPE` | `bfloat16` on CUDA, `float32` on XPU, `float32` on CPU | Override torch dtype |
 | `TTS_SPEAKERS` | *(from checkpoint)* | Comma-separated speaker names |
 | `TTS_DEFAULT_VOICE` | first speaker | Empty or unknown `voice` in the request |
 | `TTS_VOICES` | `/config/voices.json` | Optional name → speaker map |

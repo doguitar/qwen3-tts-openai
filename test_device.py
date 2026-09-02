@@ -27,15 +27,15 @@ class InferenceSettingsTests(unittest.TestCase):
     def test_cuda_bf16_sdpa(self):
         self.assertEqual(inference_settings("cuda:0"), ("bfloat16", "sdpa"))
 
-    def test_xpu_fp16_sdpa_for_alchemist(self):
-        self.assertEqual(inference_settings("xpu"), ("float16", "sdpa"))
-        self.assertEqual(inference_settings("xpu:0"), ("float16", "sdpa"))
+    def test_xpu_fp32_sdpa_for_alchemist(self):
+        self.assertEqual(inference_settings("xpu"), ("float32", "sdpa"))
+        self.assertEqual(inference_settings("xpu:0"), ("float32", "sdpa"))
 
     def test_cpu_fp32_eager(self):
         self.assertEqual(inference_settings("cpu"), ("float32", "eager"))
 
     def test_dtype_override(self):
-        self.assertEqual(inference_settings("xpu", "bfloat16"), ("bfloat16", "sdpa"))
+        self.assertEqual(inference_settings("xpu", "float16"), ("float16", "sdpa"))
         self.assertEqual(inference_settings("cuda:0", "float16"), ("float16", "sdpa"))
 
     def test_device_kind(self):

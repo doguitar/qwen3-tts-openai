@@ -33,13 +33,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Intel Level Zero / OpenCL userspace for Arc (A380 Alchemist and later).
-# Host still needs the i915/xe kernel driver and Resizable BAR; pass --device /dev/dri.
+# Host still needs the i915/xe kernel driver and Resizable BAR; pass --device=/dev/dri.
 # libze-intel-gpu1 Breaks: intel-level-zero-gpu — install only the former.
+# Use the Ubuntu "unified" channel, not "client": jammy client ships compute-runtime
+# 24.39, which cannot create a oneDNN GPU engine with torch 2.13+xpu
+# (RuntimeError: could not make an engine with allocator). unified 25.18 works.
 RUN if [ "$TORCH_BACKEND" = "xpu" ]; then \
         . /etc/os-release; \
         wget -qO - https://repositories.intel.com/gpu/intel-graphics.key \
             | gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics.gpg \
-        && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME} client" \
+        && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME} unified" \
             > /etc/apt/sources.list.d/intel-gpu.list \
         && apt-get update \
         && apt-get install -y --no-install-recommends \
