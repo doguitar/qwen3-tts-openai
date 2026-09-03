@@ -46,12 +46,13 @@ docker run --rm \
 
 echo
 echo "Tokenizer / base files are in ${MODELS}"
-echo "Next: copy your EasyFinetuning checkpoint OVER this folder."
-echo "  Windows: unraid/copy-checkpoint.ps1"
-echo "  Unraid:  rsync -av --exclude training_state.pt /path/to/checkpoint-epoch-2/ ${MODELS}/"
+echo "Next: copy each fine-tune into ${MODELS}/<id>/ (example ${MODELS}/serling/)."
+echo "Leave ${MODELS}/speech_tokenizer in place. A flat copy onto ${MODELS} still works."
+echo "  Windows: unraid/copy-checkpoint.ps1 -ModelId serling"
+echo "  Unraid:  rsync -av --exclude training_state.pt /path/to/checkpoint-epoch-2/ ${MODELS}/serling/"
 echo
 echo "Required after copy:"
-echo "  ${MODELS}/model.safetensors"
+echo "  ${MODELS}/<id>/model.safetensors   (or ${MODELS}/model.safetensors for a flat checkpoint)"
 echo "  ${MODELS}/speech_tokenizer/model.safetensors"
 echo
 echo "Then add the Unraid template:"

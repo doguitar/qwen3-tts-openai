@@ -1,6 +1,6 @@
 # qwen3-tts-openai
 
-Docker image that serves one multi-speaker [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) fine-tune behind an OpenAI-compatible API.
+Docker image that serves one or more [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) fine-tunes behind an OpenAI-compatible API. Clients see one model (`tts-1`); `voice` selects the speaker and the matching checkpoint.
 
 Images:
 
@@ -10,21 +10,21 @@ Images:
 | `:cuda` | NVIDIA CUDA |
 | `:xpu` | Intel Arc / XPU |
 
-Mount a local EasyFinetuning checkpoint at `/models`. The `voice` field in `/v1/audio/speech` selects a speaker from that checkpoint.
+Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for example `mustaine-mustaine`).
 
 ## API
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/health` | Status, loaded speakers, device |
-| `GET` | `/v1/models` | Model id (default `tts-1`) |
-| `GET` | `/v1/voices` | Speakers from the checkpoint |
-| `POST` | `/v1/audio/speech` | Audio body |
+| `GET` | `/health` | Status, public voices, device |
+| `GET` | `/v1/models` | One public id (`TTS_MODEL_NAME`, default `tts-1`) |
+| `GET` | `/v1/voices` | `{folder}-{speaker}` for every checkpoint |
+| `POST` | `/v1/audio/speech` | Audio body; `voice` is `{folder}-{speaker}` |
 
 ```bash
 curl http://HOST:8080/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","voice":"SPEAKER","input":"Hello."}' \
+  -d '{"model":"tts-1","voice":"mustaine-mustaine","input":"Hello."}' \
   --output out.mp3
 ```
 
@@ -34,20 +34,19 @@ API errors log the request body.
 
 ## Checkpoint layout
 
-Mount one fine-tune directory as `/models`:
+Mount one fine-tune directory as `/models`, or a parent of per-model subfolders:
 
 ```text
-/models/config.json
-/models/model.safetensors
+/models/<id>/config.json
+/models/<id>/model.safetensors
 /models/speech_tokenizer/model.safetensors
-/models/tokenizer_config.json
-/models/vocab.json
-/models/merges.txt
 ```
+
+A flat checkpoint at `/models` (`config.json` + weights) still works. Folder names stay private; `GET /v1/models` always returns `TTS_MODEL_NAME`.
 
 If `speech_tokenizer/model.safetensors` is missing from the checkpoint, copy it from the matching Base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base` or `1.7B-Base`). Skip `training_state.pt` for inference.
 
-Speakers come from the checkpoint. Override with `TTS_SPEAKERS` or `/config/voices.json`:
+Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json`:
 
 ```json
 {
@@ -121,13 +120,16 @@ Host paths:
 
 `unraid/download-models.sh` pulls the image and downloads Base tokenizer files. Copy your own fine-tune over `/models` afterward.
 
-OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = a speaker name in the checkpoint.
+OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = `{folder}-{speaker}`.
 
 ## Environment
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TTS_MODEL` | `/models` | Fine-tune checkpoint directory |
+| `TTS_MODEL` | `/models` | Fine-tune checkpoint directory, or parent of per-model subfolders |
+| `TTS_LOAD_POLICY` | `lazy` | `lazy` (load on first use), `one` (one resident), or `all` |
+| `TTS_DEFAULT_MODEL` | first sorted id | Fallback checkpoint / default voice owner |
+| `TTS_MODEL_NAME` | `tts-1` | Public model id listed by `GET /v1/models` |
 | `TTS_DEVICE` | `cuda:0`, else `xpu`, else `cpu` | Inference device (`cuda:0`, `xpu`, `cpu`) |
 | `TTS_DTYPE` | `bfloat16` on CUDA, `float32` on XPU, `float32` on CPU | Override torch dtype |
 | `TTS_SPEAKERS` | *(from checkpoint)* | Comma-separated speaker names |

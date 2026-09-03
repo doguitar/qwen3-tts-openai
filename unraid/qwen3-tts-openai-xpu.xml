@@ -22,7 +22,7 @@
   <DonateLink/>
   <Requires>Unraid 7.0+ (or 6.12 with a kernel that supports Arc Alchemist). Host Intel GPU driver (i915/xe). Resizable BAR must be enabled (BAR 2 4GB+, not 256MB) or XPU kernels fail. Pass /dev/dri and group 18 (video). GHCR packages start private: docker login ghcr.io, or set the package public. Copy your SFT checkpoint into /mnt/user/appdata/qwen3-tts-openai/models before starting (see unraid/download-models.sh). A380: prefer the 0.6B fine-tune. Leave TTS_DTYPE=float32; float16 currently crashes during generate() on torch 2.13+xpu.</Requires>
   <Config Name="API Port" Target="8080" Default="8080" Mode="tcp" Description="OpenAI /v1/audio/speech listen port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
-  <Config Name="Models" Target="/models" Default="/mnt/user/appdata/qwen3-tts-openai/models" Mode="ro" Description="Fine-tune checkpoint (model.safetensors + speech_tokenizer)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/qwen3-tts-openai/models</Config>
+  <Config Name="Models" Target="/models" Default="/mnt/user/appdata/qwen3-tts-openai/models" Mode="ro" Description="Checkpoint, or parent of per-model subfolders" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/qwen3-tts-openai/models</Config>
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/qwen3-tts-openai/config" Mode="rw" Description="Optional voices.json" Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/qwen3-tts-openai/config</Config>
   <Config Name="Intel GPU" Target="" Default="" Mode="" Description="Render node for Arc XPU" Type="Device" Display="always" Required="true" Mask="false">/dev/dri</Config>
   <Config Name="TTS_MODEL" Target="TTS_MODEL" Default="/models" Mode="" Description="Checkpoint path inside the container" Type="Variable" Display="advanced" Required="false" Mask="false">/models</Config>
@@ -33,4 +33,6 @@
   <Config Name="TTS_VOICES" Target="TTS_VOICES" Default="/config/voices.json" Mode="" Description="Optional name-to-speaker map" Type="Variable" Display="advanced" Required="false" Mask="false">/config/voices.json</Config>
   <Config Name="TTS_LANGUAGE" Target="TTS_LANGUAGE" Default="English" Mode="" Description="Default synthesis language" Type="Variable" Display="advanced" Required="false" Mask="false">English</Config>
   <Config Name="TTS_MODEL_NAME" Target="TTS_MODEL_NAME" Default="tts-1" Mode="" Description="OpenAI model id returned by GET /v1/models" Type="Variable" Display="advanced" Required="false" Mask="false">tts-1</Config>
+  <Config Name="TTS_LOAD_POLICY" Target="TTS_LOAD_POLICY" Default="lazy" Mode="" Description="lazy | one | all" Type="Variable" Display="advanced" Required="false" Mask="false">lazy</Config>
+  <Config Name="TTS_DEFAULT_MODEL" Target="TTS_DEFAULT_MODEL" Default="" Mode="" Description="Folder name; first sorted if empty" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 </Container>
