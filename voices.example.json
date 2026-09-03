@@ -1,7 +1,6 @@
 {
   "voices": {
-    "serling": "serling",
-    "mark": "mark",
-    "sinatra": "sinatra"
+    "alice": "alice",
+    "bob": "bob"
   }
 }

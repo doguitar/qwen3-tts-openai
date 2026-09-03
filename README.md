@@ -10,7 +10,7 @@ Images:
 | `:cuda` | NVIDIA CUDA |
 | `:xpu` | Intel Arc / XPU |
 
-Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for example `mustaine-mustaine`).
+Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for example `alpha-alice`).
 
 ## API
 
@@ -24,7 +24,7 @@ Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for e
 ```bash
 curl http://HOST:8080/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","voice":"mustaine-mustaine","input":"Hello."}' \
+  -d '{"model":"tts-1","voice":"alpha-alice","input":"Hello."}' \
   --output out.mp3
 ```
 
