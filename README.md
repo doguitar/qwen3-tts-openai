@@ -118,8 +118,6 @@ Host paths:
 - `/mnt/user/appdata/qwen3-tts-openai/models` → `/models` (checkpoint)
 - `/mnt/user/appdata/qwen3-tts-openai/config` → `/config` (optional `voices.json`)
 
-`unraid/download-models.sh` pulls the image and downloads Base tokenizer files. Copy your own fine-tune over `/models` afterward.
-
 OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = `{folder}-{speaker}`.
 
 ## Environment

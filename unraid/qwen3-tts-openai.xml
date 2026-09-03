@@ -20,7 +20,7 @@
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires>Unraid 6.12+, NVIDIA Driver plugin, NVIDIA Container Toolkit. Uses :cuda (CPU is :latest/:cpu; Intel Arc is :xpu). GHCR packages start private: docker login ghcr.io, or set the package public. Copy your SFT checkpoint into /mnt/user/appdata/qwen3-tts-openai/models before starting (see unraid/download-models.sh).</Requires>
+  <Requires>Unraid 6.12+, NVIDIA Driver plugin, NVIDIA Container Toolkit. Uses :cuda (CPU is :latest/:cpu; Intel Arc is :xpu). GHCR packages start private: docker login ghcr.io, or set the package public. Copy your SFT checkpoint into /mnt/user/appdata/qwen3-tts-openai/models before starting.</Requires>
   <Config Name="API Port" Target="8080" Default="8080" Mode="tcp" Description="OpenAI /v1/audio/speech listen port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Models" Target="/models" Default="/mnt/user/appdata/qwen3-tts-openai/models" Mode="ro" Description="Checkpoint, or parent of per-model subfolders" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/qwen3-tts-openai/models</Config>
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/qwen3-tts-openai/config" Mode="rw" Description="Optional voices.json" Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/qwen3-tts-openai/config</Config>
