@@ -77,6 +77,7 @@ RUN pip3 install --no-deps qwen-tts==0.1.1 \
 
 COPY server.py /app/server.py
 COPY device.py /app/device.py
+COPY models.py /app/models.py
 COPY voices.example.json /app/voices.example.json
 
 EXPOSE 8080
