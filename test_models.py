@@ -96,24 +96,24 @@ class DefaultAndResolveTests(unittest.TestCase):
         self.assertEqual(default_model_id(["a-ckpt", "b-ckpt"], "missing"), "a-ckpt")
 
     def test_resolve_model_id(self):
-        ids = ["serling"]
-        self.assertEqual(resolve_model_id("", ids, "serling"), "serling")
-        self.assertEqual(resolve_model_id("tts-1", ids, "serling"), "serling")
-        self.assertEqual(resolve_model_id("qwen3-tts", ids, "serling"), "serling")
-        self.assertEqual(resolve_model_id("serling", ids, "serling"), "serling")
-        self.assertIsNone(resolve_model_id("nope", ids, "serling"))
+        ids = ["bravo"]
+        self.assertEqual(resolve_model_id("", ids, "bravo"), "bravo")
+        self.assertEqual(resolve_model_id("tts-1", ids, "bravo"), "bravo")
+        self.assertEqual(resolve_model_id("qwen3-tts", ids, "bravo"), "bravo")
+        self.assertEqual(resolve_model_id("bravo", ids, "bravo"), "bravo")
+        self.assertIsNone(resolve_model_id("nope", ids, "bravo"))
         self.assertTrue(is_public_model_request("", "tts-1"))
         self.assertTrue(is_public_model_request("tts-1", "tts-1"))
         self.assertTrue(is_public_model_request("qwen3-tts", "tts-1"))
-        self.assertFalse(is_public_model_request("mustaine", "tts-1"))
+        self.assertFalse(is_public_model_request("alpha", "tts-1"))
 
 
 class VoiceIndexTests(unittest.TestCase):
     def test_checkpoint_speakers_from_spk_id(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            _write_spk_config(root, {"mustaine": 3000, "serling": 3001})
-            self.assertEqual(checkpoint_speakers(root), ["mustaine", "serling"])
+            _write_spk_config(root, {"alice": 3000, "bob": 3001})
+            self.assertEqual(checkpoint_speakers(root), ["alice", "bob"])
 
     def test_checkpoint_speakers_missing_or_invalid(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -126,104 +126,104 @@ class VoiceIndexTests(unittest.TestCase):
     def test_build_index_two_solos(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            _write_spk_config(root / "mustaine", {"mustaine": 3000})
-            _write_spk_config(root / "serling", {"serling": 3000})
+            _write_spk_config(root / "alpha", {"alice": 3000})
+            _write_spk_config(root / "bravo", {"bob": 3000})
             catalog = discover_checkpoints(root, "tts-1")
-            index = build_voice_index(catalog, [], "mustaine")
-            self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
-            self.assertEqual(index["serling-serling"], ("serling", "serling"))
-            self.assertEqual(public_voice_names(index), ["mustaine-mustaine", "serling-serling"])
+            index = build_voice_index(catalog, [], "alpha")
+            self.assertEqual(index["alpha-alice"], ("alpha", "alice"))
+            self.assertEqual(index["bravo-bob"], ("bravo", "bob"))
+            self.assertEqual(public_voice_names(index), ["alpha-alice", "bravo-bob"])
             self.assertEqual(
-                public_default_voice(index, "", ["mustaine", "serling"]),
-                "mustaine-mustaine",
+                public_default_voice(index, "", ["alpha", "bravo"]),
+                "alpha-alice",
             )
             self.assertEqual(
-                public_default_voice(index, "serling", ["mustaine", "serling"]),
-                "serling-serling",
+                public_default_voice(index, "bob", ["alpha", "bravo"]),
+                "bravo-bob",
             )
             self.assertEqual(
-                public_default_voice(index, "serling-serling", ["mustaine", "serling"]),
-                "serling-serling",
+                public_default_voice(index, "bravo-bob", ["alpha", "bravo"]),
+                "bravo-bob",
             )
 
     def test_prefixed_names_keep_colliding_speakers(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            _write_spk_config(root / "cast", {"mustaine": 3003, "serling": 3000})
-            _write_spk_config(root / "mustaine", {"mustaine": 3000})
+            _write_spk_config(root / "cast", {"alice": 3003, "bob": 3000})
+            _write_spk_config(root / "alpha", {"alice": 3000})
             catalog = discover_checkpoints(root, "tts-1")
             index = build_voice_index(catalog, [], "cast")
-            self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
-            self.assertEqual(index["cast-mustaine"], ("cast", "mustaine"))
-            self.assertEqual(index["cast-serling"], ("cast", "serling"))
+            self.assertEqual(index["alpha-alice"], ("alpha", "alice"))
+            self.assertEqual(index["cast-alice"], ("cast", "alice"))
+            self.assertEqual(index["cast-bob"], ("cast", "bob"))
             self.assertEqual(
                 public_voice_names(index),
-                ["cast-mustaine", "cast-serling", "mustaine-mustaine"],
+                ["alpha-alice", "cast-alice", "cast-bob"],
             )
 
     def test_overlay_alias_and_explicit_model(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            _write_spk_config(root / "mustaine", {"mustaine": 3000})
-            catalog = [("mustaine", root / "mustaine")]
+            _write_spk_config(root / "alpha", {"alice": 3000})
+            catalog = [("alpha", root / "alpha")]
             overlays = parse_voice_overlays(
-                {"voices": {"dave": {"speaker": "mustaine", "model": "mustaine"}}},
-                "mustaine",
+                {"voices": {"nickname": {"speaker": "alice", "model": "alpha"}}},
+                "alice",
             )
-            index = build_voice_index(catalog, overlays, "mustaine")
-            self.assertEqual(index["dave"], ("mustaine", "mustaine"))
-            self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
-            self.assertEqual(public_voice_names(index), ["mustaine-mustaine"])
+            index = build_voice_index(catalog, overlays, "alpha")
+            self.assertEqual(index["nickname"], ("alpha", "alice"))
+            self.assertEqual(index["alpha-alice"], ("alpha", "alice"))
+            self.assertEqual(public_voice_names(index), ["alpha-alice"])
 
     def test_resolve_voice_route(self):
         index = {
-            "mustaine-mustaine": ("mustaine", "mustaine"),
-            "serling-serling": ("serling", "serling"),
+            "alpha-alice": ("alpha", "alice"),
+            "bravo-bob": ("bravo", "bob"),
         }
 
         def key(value: str) -> str:
             return value.lower().replace("-", "")
 
         mid, speaker, fell, _reason = resolve_voice_route(
-            "mustaine-mustaine", index, "serling-serling", frozenset({"alloy"}), key
+            "alpha-alice", index, "bravo-bob", frozenset({"alloy"}), key
         )
-        self.assertEqual((mid, speaker, fell), ("mustaine", "mustaine", False))
+        self.assertEqual((mid, speaker, fell), ("alpha", "alice", False))
         mid, speaker, fell, _reason = resolve_voice_route(
-            "Mustaine", index, "serling-serling", frozenset({"alloy"}), key
+            "Alice", index, "bravo-bob", frozenset({"alloy"}), key
         )
-        self.assertEqual((mid, speaker, fell), ("mustaine", "mustaine", False))
+        self.assertEqual((mid, speaker, fell), ("alpha", "alice", False))
         mid, speaker, fell, reason = resolve_voice_route(
-            "alloy", index, "serling-serling", frozenset({"alloy"}), key
+            "alloy", index, "bravo-bob", frozenset({"alloy"}), key
         )
-        self.assertEqual((mid, speaker, fell), ("serling", "serling", True))
+        self.assertEqual((mid, speaker, fell), ("bravo", "bob", True))
         self.assertIn("openai stock", reason)
         mid, speaker, fell, _reason = resolve_voice_route(
-            "nope", index, "serling-serling", frozenset(), key
+            "nope", index, "bravo-bob", frozenset(), key
         )
-        self.assertEqual((mid, speaker, fell), ("serling", "serling", True))
+        self.assertEqual((mid, speaker, fell), ("bravo", "bob", True))
 
     def test_bare_speaker_ambiguous_falls_back(self):
         index = {
-            "cast-mustaine": ("cast", "mustaine"),
-            "mustaine-mustaine": ("mustaine", "mustaine"),
+            "cast-alice": ("cast", "alice"),
+            "alpha-alice": ("alpha", "alice"),
         }
 
         def key(value: str) -> str:
             return value.lower().replace("-", "")
 
         mid, speaker, fell, reason = resolve_voice_route(
-            "mustaine", index, "cast-mustaine", frozenset(), key
+            "alice", index, "cast-alice", frozenset(), key
         )
-        self.assertEqual((mid, speaker, fell), ("cast", "mustaine", True))
+        self.assertEqual((mid, speaker, fell), ("cast", "alice", True))
         self.assertIn("unknown voice", reason)
         mid, speaker, fell, _reason = resolve_voice_route(
-            "mustaine-mustaine", index, "cast-mustaine", frozenset(), key
+            "alpha-alice", index, "cast-alice", frozenset(), key
         )
-        self.assertEqual((mid, speaker, fell), ("mustaine", "mustaine", False))
+        self.assertEqual((mid, speaker, fell), ("alpha", "alice", False))
 
     def test_public_voice_id(self):
-        self.assertEqual(public_voice_id("mustaine", "mustaine"), "mustaine-mustaine")
-        self.assertEqual(public_voice_id("cast", "serling"), "cast-serling")
+        self.assertEqual(public_voice_id("alpha", "alice"), "alpha-alice")
+        self.assertEqual(public_voice_id("cast", "bob"), "cast-bob")
 
 
 if __name__ == "__main__":
