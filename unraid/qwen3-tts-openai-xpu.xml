@@ -11,7 +11,7 @@
   <Project>https://github.com/doguitar/qwen3-tts-openai</Project>
   <Overview>OpenAI-compatible TTS for one or more Qwen3 fine-tunes on Intel Arc XPU (Arc A380 / Alchemist). Mount checkpoints at /models. Clients see one model (tts-1); voice is {folder}-{speaker}. Use the 0.6B checkpoint; A380 has 6GB.</Overview>
   <Category>AI: HomeAutomation:</Category>
-  <WebUI>http://[IP]:[PORT:8080]/health</WebUI>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/doguitar/qwen3-tts-openai/main/unraid/qwen3-tts-openai-xpu.xml</TemplateURL>
   <Icon>https://avatars.githubusercontent.com/u/1200188?v=4</Icon>
   <ExtraParams>--device=/dev/dri --group-add 18</ExtraParams>

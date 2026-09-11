@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3 TTS</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 1.5rem; }
+    main { max-width: 720px; margin: 0 auto; }
+    nav { margin-bottom: 1.25rem; }
+    nav a { color: #9cf; margin-right: 1rem; }
+    label { display: block; margin: 0.75rem 0 0.25rem; }
+    select, textarea, input, button { font: inherit; }
+    select, textarea, input[type="text"] {
+      width: 100%; box-sizing: border-box; background: #1c1c1c; color: #eee;
+      border: 1px solid #444; padding: 0.5rem;
+    }
+    textarea { min-height: 8rem; }
+    .row { display: flex; gap: 0.5rem; align-items: center; }
+    .row select { flex: 1; }
+    button { background: #2a4a7a; color: #fff; border: 0; padding: 0.5rem 0.9rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    #status { min-height: 1.4em; }
+    #player, #download { display: none; margin-top: 0.75rem; }
+    #download { color: #9cf; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="/">Generate</a><a href="/config">Config</a></nav>
+    <h1>Qwen3 TTS</h1>
+    <label for="voice">Voice</label>
+    <div class="row">
+      <select id="voice"></select>
+      <button type="button" id="rescan">Rescan models</button>
+    </div>
+    <label for="text">Text</label>
+    <textarea id="text" required></textarea>
+    <label for="instructions">Instructions (optional)</label>
+    <input id="instructions" type="text">
+    <p><button type="button" id="generate">Generate</button></p>
+    <p id="status"></p>
+    <audio id="player" controls></audio>
+    <a id="download" download="clip.mp3">Download MP3</a>
+  </main>
+  <script>
+    const voiceEl = document.getElementById("voice");
+    const textEl = document.getElementById("text");
+    const instructionsEl = document.getElementById("instructions");
+    const generateBtn = document.getElementById("generate");
+    const rescanBtn = document.getElementById("rescan");
+    const statusEl = document.getElementById("status");
+    const player = document.getElementById("player");
+    const download = document.getElementById("download");
+    let objectUrl = null;
+
+    function setBusy(busy) {
+      generateBtn.disabled = busy;
+      rescanBtn.disabled = busy;
+    }
+
+    function fillVoices(data, keep) {
+      const names = (data.data || []).map((row) => row.voice_id);
+      const preferred = keep && names.includes(keep) ? keep : (data.default || names[0] || "");
+      voiceEl.innerHTML = "";
+      for (const name of names) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === preferred) opt.selected = true;
+        voiceEl.appendChild(opt);
+      }
+    }
+
+    async function loadVoices() {
+      const res = await fetch("/v1/voices");
+      const data = await res.json();
+      fillVoices(data);
+    }
+
+    function revokeBlob() {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      player.removeAttribute("src");
+      player.style.display = "none";
+      download.style.display = "none";
+    }
+
+    function errorDetail(data, fallback) {
+      if (data && typeof data.detail === "string") return data.detail;
+      if (data && data.detail != null) return JSON.stringify(data.detail);
+      return fallback;
+    }
+
+    rescanBtn.addEventListener("click", async () => {
+      const keep = voiceEl.value;
+      setBusy(true);
+      statusEl.textContent = "";
+      try {
+        const res = await fetch("/ui/rescan", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = errorDetail(data, res.statusText);
+          return;
+        }
+        const names = data.voices || [];
+        fillVoices({
+          data: names.map((voice_id) => ({ voice_id })),
+          default: data.default,
+        }, keep);
+        statusEl.textContent = "rescanned " + names.length;
+      } catch (err) {
+        statusEl.textContent = String(err);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    generateBtn.addEventListener("click", async () => {
+      const text = textEl.value.trim();
+      if (!text) {
+        statusEl.textContent = "enter text";
+        return;
+      }
+      setBusy(true);
+      statusEl.textContent = "";
+      try {
+        const body = {
+          model: "tts-1",
+          voice: voiceEl.value,
+          input: text,
+          response_format: "mp3",
+        };
+        const instructions = instructionsEl.value.trim();
+        if (instructions) body.instructions = instructions;
+        const res = await fetch("/v1/audio/speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          revokeBlob();
+          let data = null;
+          try { data = await res.json(); } catch (_) {}
+          statusEl.textContent = errorDetail(data, res.statusText);
+          return;
+        }
+        const blob = await res.blob();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = URL.createObjectURL(blob);
+        player.src = objectUrl;
+        player.style.display = "block";
+        download.href = objectUrl;
+        download.download = (voiceEl.value || "clip") + ".mp3";
+        download.style.display = "inline";
+        let status = "ok";
+        const used = res.headers.get("X-TTS-Voice-Used");
+        if (used) status += " " + used;
+        if (res.headers.get("X-TTS-Fell-Back") === "1") {
+          const reason = res.headers.get("X-TTS-Fell-Back-Reason");
+          if (reason) status += " " + reason;
+        }
+        statusEl.textContent = status;
+      } catch (err) {
+        revokeBlob();
+        statusEl.textContent = String(err);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    loadVoices().catch((err) => { statusEl.textContent = String(err); });
+  </script>
+</body>
+</html>
