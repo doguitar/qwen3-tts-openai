@@ -16,10 +16,15 @@ Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for e
 
 | Method | Path | Notes |
 |---|---|---|
+| `GET` | `/` | Generator UI (voice dropdown, in-page MP3, download) |
+| `GET` | `/config` | `voices.json` editor |
+| `POST` | `/ui/rescan` | Re-read checkpoints and `voices.json` |
 | `GET` | `/health` | Status, public voices, device |
 | `GET` | `/v1/models` | One public id (`TTS_MODEL_NAME`, default `tts-1`) |
 | `GET` | `/v1/voices` | `{folder}-{speaker}` for every checkpoint |
 | `POST` | `/v1/audio/speech` | Audio body; `voice` is `{folder}-{speaker}` |
+
+`GET /config` writes `TTS_VOICES` only when that path is writable. Save and Rescan update live voices without a process restart.
 
 ```bash
 curl http://HOST:8080/v1/audio/speech \

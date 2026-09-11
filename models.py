@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 WEIGHT_NAMES = ("model.safetensors", "pytorch_model.bin", "model.pth", "model.pt")
@@ -113,6 +114,78 @@ def parse_voice_overlays(data: object | None, env_speakers: str) -> list[tuple[s
         if name:
             out.append((name, name, None))
     return out
+
+
+def voices_file_writable(path: Path) -> bool:
+    try:
+        if path.is_file():
+            return os.access(path, os.W_OK)
+        return path.parent.is_dir() and os.access(path.parent, os.W_OK)
+    except OSError:
+        return False
+
+
+def load_voices_document(path: Path) -> tuple[dict, str | None]:
+    if not path.is_file():
+        return {"voices": {}}, None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {"voices": {}}, str(exc)
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {"voices": {}}, f"invalid JSON: {exc}"
+    if isinstance(decoded, dict) and "voices" in decoded and isinstance(decoded["voices"], dict):
+        return decoded, None
+    if isinstance(decoded, dict) and "voices" not in decoded:
+        return {"voices": decoded}, None
+    return {"voices": {}}, "voices.json must be a JSON object"
+
+
+def validate_voices_document(data: object) -> dict:
+    if not isinstance(data, dict):
+        raise ValueError("voices.json must be a JSON object")
+    voices = data["voices"] if "voices" in data else data
+    if not isinstance(voices, dict):
+        raise ValueError("voices must be a JSON object")
+    normalized: dict[str, str | dict[str, str]] = {}
+    for raw_key, spec in voices.items():
+        key = str(raw_key).strip()
+        if not key:
+            raise ValueError("empty alias")
+        if isinstance(spec, str):
+            if not spec.strip():
+                raise ValueError(f"{key}: speaker must be a non-empty string")
+            normalized[key] = spec
+            continue
+        if isinstance(spec, dict):
+            speaker = spec.get("speaker")
+            if not isinstance(speaker, str) or not speaker.strip():
+                raise ValueError(f"{key}: speaker must be a non-empty string")
+            entry: dict[str, str] = {"speaker": speaker}
+            model = spec.get("model")
+            if model is not None:
+                if not isinstance(model, str):
+                    raise ValueError(f"{key}: model must be a string")
+                if model.strip():
+                    entry["model"] = model
+            normalized[key] = entry
+            continue
+        raise ValueError(f"{key}: value must be a string or object")
+    return {"voices": normalized}
+
+
+def write_voices_document(path: Path, document: dict) -> None:
+    text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        if tmp.exists():
+            tmp.unlink()
+        raise
 
 
 def _owners_for_speaker(index: dict[str, tuple[str, str]], speaker: str) -> list[str]:

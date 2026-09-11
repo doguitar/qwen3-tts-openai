@@ -79,6 +79,7 @@ COPY server.py /app/server.py
 COPY device.py /app/device.py
 COPY models.py /app/models.py
 COPY voices.example.json /app/voices.example.json
+COPY static /app/static
 
 EXPOSE 8080
 VOLUME ["/models", "/config"]

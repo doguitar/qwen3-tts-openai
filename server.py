@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """OpenAI-compatible TTS API for one or more Qwen3 fine-tunes.
 
+  GET  /
+  GET  /config
   GET  /health
   GET  /v1/models          one public id (TTS_MODEL_NAME, default tts-1)
   GET  /v1/voices          `{folder}-{speaker}` for every checkpoint
@@ -28,7 +30,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from device import inference_settings, select_device
@@ -38,12 +40,16 @@ from models import (
     default_model_id,
     discover_checkpoints,
     is_public_model_request,
+    load_voices_document,
     parse_load_policy,
     parse_voice_overlays,
     public_default_voice,
     public_voice_id,
     public_voice_names,
     resolve_voice_route,
+    validate_voices_document,
+    voices_file_writable,
+    write_voices_document,
 )
 
 OPENAI_STOCK_VOICES = {
@@ -79,6 +85,7 @@ DEFAULT_LANGUAGE = os.environ.get("TTS_LANGUAGE", "English")
 MODEL_NAME = os.environ.get("TTS_MODEL_NAME", "tts-1")
 LOAD_POLICY = parse_load_policy(os.environ.get("TTS_LOAD_POLICY", ""))
 TTS_DEFAULT_MODEL = os.environ.get("TTS_DEFAULT_MODEL", "").strip()
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def xpu_available() -> bool:
@@ -286,6 +293,67 @@ def _rebuild_voice_index() -> None:
     )
 
 
+
+def _reload_voice_overlays() -> None:
+    global voice_overlays
+    voice_overlays = _read_overlays()
+    _rebuild_voice_index()
+
+
+def _refresh_speakers_maps() -> None:
+    ids = set(catalog_ids())
+    for stale in list(speakers_by):
+        if stale not in ids:
+            speakers_by.pop(stale, None)
+            default_voice_by.pop(stale, None)
+    for model_id, path in catalog:
+        supported = checkpoint_speakers(path)
+        if model_id in loaded and hasattr(loaded[model_id], "get_supported_speakers"):
+            extra = list(loaded[model_id].get_supported_speakers() or [])
+            if extra:
+                supported = extra
+        speakers_by[model_id], default_voice_by[model_id] = _speakers_for(model_id, supported)
+
+
+def _rescan_catalog() -> dict:
+    global catalog, default_id
+    with lock:
+        found = discover_checkpoints(Path(MODEL_PATH), MODEL_NAME)
+        if not found:
+            raise HTTPException(status_code=400, detail=f"no checkpoints under {MODEL_PATH}")
+        new_ids = {i for i, _ in found}
+        for mid in list(loaded):
+            if mid not in new_ids:
+                _unload_one(mid)
+        catalog = found
+        default_id = default_model_id(catalog_ids(), TTS_DEFAULT_MODEL)
+        _refresh_speakers_maps()
+        _reload_voice_overlays()
+        print(
+            f"rescanned public={MODEL_NAME} voices={public_voice_names(voice_index)} "
+            f"checkpoints={catalog_ids()} default_ckpt={default_id}",
+            flush=True,
+        )
+        return {
+            "ok": True,
+            "voices": public_voice_names(voice_index),
+            "default": default_voice,
+            "models": [{"id": i, "path": str(p), "loaded": i in loaded} for i, p in catalog],
+        }
+
+
+def _voices_ui_payload() -> dict:
+    document, error = load_voices_document(VOICES_PATH)
+    return {
+        "path": str(VOICES_PATH),
+        "exists": VOICES_PATH.is_file(),
+        "writable": voices_file_writable(VOICES_PATH),
+        "document": document,
+        "speakers_env": os.environ.get("TTS_SPEAKERS", ""),
+        "error": error,
+    }
+
+
 def _speakers_for(model_id: str, supported: list[str]) -> tuple[dict[str, str], str]:
     mapping: dict[str, str] = {}
     for name in supported:
@@ -379,6 +447,61 @@ def startup() -> None:
         f"device={DEVICE} dtype={DTYPE_NAME} attn={ATTN} xpu={xpu_name!r}",
         flush=True,
     )
+
+
+
+@app.get("/")
+def ui_index():
+    path = STATIC_DIR / "index.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="ui missing")
+    return FileResponse(path)
+
+
+@app.get("/config")
+def ui_config():
+    path = STATIC_DIR / "config.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="ui missing")
+    return FileResponse(path)
+
+
+@app.get("/ui/voices")
+def ui_voices_get():
+    return _voices_ui_payload()
+
+
+@app.put("/ui/voices")
+async def ui_voices_put(request: Request):
+    if not voices_file_writable(VOICES_PATH):
+        raise HTTPException(status_code=403, detail="voices.json is not writable")
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="voices.json must be a JSON object")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="voices.json must be a JSON object")
+    try:
+        document = validate_voices_document(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        write_voices_document(VOICES_PATH, document)
+    except OSError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    with lock:
+        _reload_voice_overlays()
+        _refresh_speakers_maps()
+        _rebuild_voice_index()
+    payload = _voices_ui_payload()
+    payload["voices"] = public_voice_names(voice_index)
+    payload["default"] = default_voice
+    return payload
+
+
+@app.post("/ui/rescan")
+def ui_rescan():
+    return _rescan_catalog()
 
 
 @app.get("/health")

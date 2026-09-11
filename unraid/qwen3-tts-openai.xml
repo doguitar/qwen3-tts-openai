@@ -11,7 +11,7 @@
   <Project>https://github.com/doguitar/qwen3-tts-openai</Project>
   <Overview>OpenAI-compatible TTS for one or more Qwen3 fine-tunes on NVIDIA CUDA. Image tag :cuda (not :latest, which is CPU). Mount checkpoints at /models. Clients see one model (tts-1); voice is {folder}-{speaker}. This is not Faster-Qwen3-TTS-Wyoming and will not load stock CustomVoice Hugging Face ids.</Overview>
   <Category>AI: HomeAutomation:</Category>
-  <WebUI>http://[IP]:[PORT:8080]/health</WebUI>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/doguitar/qwen3-tts-openai/main/unraid/qwen3-tts-openai.xml</TemplateURL>
   <Icon>https://avatars.githubusercontent.com/u/1200188?v=4</Icon>
   <ExtraParams>--runtime=nvidia --gpus all</ExtraParams>
