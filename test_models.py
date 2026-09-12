@@ -6,16 +6,20 @@ from pathlib import Path
 
 from models import (
     build_voice_index,
+    checkpoint_kind,
     checkpoint_speakers,
     default_model_id,
     discover_checkpoints,
     is_public_model_request,
+    merge_instructions,
+    overlay_instructions,
     parse_load_policy,
     parse_voice_overlays,
     public_default_voice,
     public_voice_id,
     public_voice_names,
     resolve_model_id,
+    resolve_overlay_target,
     resolve_voice_route,
 )
 
@@ -161,6 +165,42 @@ class VoiceIndexTests(unittest.TestCase):
                 ["alpha-alice", "cast-alice", "cast-bob"],
             )
 
+    def test_overlay_public_id_short_name(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _write_spk_config(root / "mustaine", {"mustaine": 3000})
+            catalog = [("mustaine", root / "mustaine")]
+            overlays = parse_voice_overlays({"voices": {"mustaine": "mustaine-mustaine"}}, "")
+            index = build_voice_index(catalog, overlays, "mustaine")
+            self.assertEqual(index["mustaine"], ("mustaine", "mustaine"))
+            self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
+            self.assertEqual(public_voice_names(index), ["mustaine-mustaine"])
+            self.assertEqual(public_voice_names(index, overlays), ["mustaine", "mustaine-mustaine"])
+            self.assertNotIn("mustaine-mustaine-mustaine", index)
+            self.assertNotIn("mustaine-mustaine-mustaine", public_voice_names(index, overlays))
+
+            overlays_obj = parse_voice_overlays(
+                {"voices": {"mustaine": {"speaker": "mustaine-mustaine"}}},
+                "",
+            )
+            index_obj = build_voice_index(catalog, overlays_obj, "mustaine")
+            self.assertEqual(index_obj["mustaine"], ("mustaine", "mustaine"))
+            self.assertEqual(index_obj["mustaine-mustaine"], ("mustaine", "mustaine"))
+            self.assertNotIn("mustaine-mustaine-mustaine", index_obj)
+
+            skipped = parse_voice_overlays({"voices": {"short": "nope"}}, "")
+            index_skip = build_voice_index(catalog, skipped, "mustaine")
+            self.assertNotIn("short", index_skip)
+
+    def test_merge_and_overlay_instructions(self):
+        self.assertEqual(merge_instructions("Male 40s", "whisper"), "Male 40s whisper")
+        self.assertEqual(merge_instructions("Male 40s", ""), "Male 40s")
+        self.assertEqual(merge_instructions("", "whisper"), "whisper")
+        self.assertIsNone(merge_instructions("  ", None))
+        overlays = [("Narrator", "alice", "alpha", "Male 40s")]
+        self.assertEqual(overlay_instructions("narrator", overlays), "Male 40s")
+        self.assertEqual(overlay_instructions("missing", overlays), "")
+
     def test_overlay_alias_and_explicit_model(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -224,6 +264,40 @@ class VoiceIndexTests(unittest.TestCase):
     def test_public_voice_id(self):
         self.assertEqual(public_voice_id("alpha", "alice"), "alpha-alice")
         self.assertEqual(public_voice_id("cast", "bob"), "cast-bob")
+
+
+class CheckpointKindTests(unittest.TestCase):
+    def test_missing_config(self):
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertEqual(checkpoint_kind(Path(raw)), "custom_voice")
+
+    def test_empty_object(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(checkpoint_kind(root), "custom_voice")
+
+    def test_voice_design_normalized(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "config.json").write_text(
+                json.dumps({"tts_model_type": " Voice_Design "}), encoding="utf-8"
+            )
+            self.assertEqual(checkpoint_kind(root), "voice_design")
+
+    def test_custom_voice(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "config.json").write_text(
+                json.dumps({"tts_model_type": "custom_voice"}), encoding="utf-8"
+            )
+            self.assertEqual(checkpoint_kind(root), "custom_voice")
+
+    def test_broken_json(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "config.json").write_text("{", encoding="utf-8")
+            self.assertEqual(checkpoint_kind(root), "custom_voice")
 
 
 if __name__ == "__main__":

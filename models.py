@@ -92,27 +92,44 @@ def checkpoint_speakers(path: Path) -> list[str]:
     return []
 
 
-def parse_voice_overlays(data: object | None, env_speakers: str) -> list[tuple[str, str, str | None]]:
-    """Return (alias, speaker, model_or_None) from voices.json + TTS_SPEAKERS."""
-    out: list[tuple[str, str, str | None]] = []
+def checkpoint_kind(path: Path) -> str:
+    """tts_model_type from config.json; missing/unreadable → custom_voice."""
+    cfg_path = path / "config.json"
+    if not cfg_path.is_file():
+        return "custom_voice"
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "custom_voice"
+    raw = data.get("tts_model_type") if isinstance(data, dict) else ""
+    return (raw or "").strip().lower() or "custom_voice"
+
+
+def parse_voice_overlays(
+    data: object | None, env_speakers: str
+) -> list[tuple[str, str, str | None, str]]:
+    """Return (alias, speaker, model_or_None, preset) from voices.json + TTS_SPEAKERS."""
+    out: list[tuple[str, str, str | None, str]] = []
     if isinstance(data, dict):
         voices = data.get("voices", data)
         if isinstance(voices, dict):
             for name, spec in voices.items():
                 if isinstance(spec, str):
-                    out.append((str(name), spec, None))
+                    out.append((str(name), spec, None, ""))
                 elif isinstance(spec, dict):
                     speaker = str(spec.get("speaker") or spec.get("name") or name)
                     model = spec.get("model")
                     model_id = str(model).strip() if model else None
-                    out.append((str(name), speaker, model_id or None))
+                    raw_preset = spec.get("instructions")
+                    preset = raw_preset.strip() if isinstance(raw_preset, str) else ""
+                    out.append((str(name), speaker, model_id or None, preset))
         elif isinstance(voices, list):
             for name in voices:
-                out.append((str(name), str(name), None))
+                out.append((str(name), str(name), None, ""))
     for name in (env_speakers or "").split(","):
         name = name.strip()
         if name:
-            out.append((name, name, None))
+            out.append((name, name, None, ""))
     return out
 
 
@@ -170,6 +187,13 @@ def validate_voices_document(data: object) -> dict:
                     raise ValueError(f"{key}: model must be a string")
                 if model.strip():
                     entry["model"] = model
+            if "instructions" in spec:
+                instructions = spec.get("instructions")
+                if not isinstance(instructions, str):
+                    raise ValueError(f"{key}: instructions must be a string")
+                stripped = instructions.strip()
+                if stripped:
+                    entry["instructions"] = stripped
             normalized[key] = entry
             continue
         raise ValueError(f"{key}: value must be a string or object")
@@ -197,43 +221,95 @@ def _owners_for_speaker(index: dict[str, tuple[str, str]], speaker: str) -> list
     return seen
 
 
+def resolve_overlay_target(
+    speaker: str,
+    model_hint: str | None,
+    index: dict[str, tuple[str, str]],
+    catalog_ids: list[str],
+    default_id: str,
+) -> tuple[str, str] | None:
+    """Map overlay Maps-to to an existing (model_id, real_speaker), or None."""
+    del default_id
+    key = (speaker or "").strip().lower()
+    if not key:
+        return None
+    if key in index:
+        return index[key]
+    stripped = speaker.strip()
+    if model_hint and model_hint in catalog_ids:
+        pub = public_voice_id(model_hint, stripped).lower()
+        if pub in index:
+            return index[pub]
+        owners = _owners_for_speaker(index, stripped)
+        if model_hint in owners or not owners:
+            if pub in index:
+                return index[pub]
+        if owners == [model_hint]:
+            return (model_hint, stripped)
+    owners = _owners_for_speaker(index, stripped)
+    if len(owners) == 1:
+        return (owners[0], stripped)
+    return None
+
+
+def merge_instructions(preset: str | None, extra: str | None) -> str | None:
+    a = (preset or "").strip()
+    b = (extra or "").strip()
+    if a and b:
+        return f"{a} {b}"
+    if a:
+        return a
+    if b:
+        return b
+    return None
+
+
+def overlay_instructions(
+    name: str, overlays: list[tuple[str, str, str | None, str]]
+) -> str:
+    key = (name or "").strip().lower()
+    preset = ""
+    for alias, _speaker, _hint, item_preset in overlays:
+        if alias.strip().lower() == key:
+            preset = item_preset
+    return preset
+
+
 def build_voice_index(
     catalog: list[tuple[str, Path]],
-    overlays: list[tuple[str, str, str | None]],
+    overlays: list[tuple[str, str, str | None, str]],
     default_id: str,
 ) -> dict[str, tuple[str, str]]:
     """Map lowercased public voice id -> (checkpoint id, speaker). Canonical id is `{model}-{speaker}`."""
     index: dict[str, tuple[str, str]] = {}
     ids = [i for i, _ in catalog]
-    id_lower = {i.lower(): i for i in ids}
     for model_id, path in catalog:
         names = checkpoint_speakers(path) or [model_id]
         for name in names:
             index[public_voice_id(model_id, name).lower()] = (model_id, name)
-    for alias, speaker, model_hint in overlays:
-        if model_hint and model_hint in ids:
-            mid = model_hint
-        else:
-            owners = _owners_for_speaker(index, speaker)
-            if len(owners) == 1:
-                mid = owners[0]
-            elif alias.lower() in id_lower:
-                mid = id_lower[alias.lower()]
-            else:
-                mid = default_id
-        speaker = speaker.strip() or alias
-        pub = public_voice_id(mid, speaker)
-        index.setdefault(pub.lower(), (mid, speaker))
-        if alias.strip() and alias.lower() != pub.lower():
-            index[alias.lower()] = (mid, speaker)
+    for alias, speaker, model_hint, _preset in overlays:
+        resolved = resolve_overlay_target(speaker, model_hint, index, ids, default_id)
+        if resolved is None:
+            continue
+        mid, real = resolved
+        if alias.strip():
+            index[alias.strip().lower()] = (mid, real)
     return index
 
 
-def public_voice_names(index: dict[str, tuple[str, str]]) -> list[str]:
+def public_voice_names(
+    index: dict[str, tuple[str, str]],
+    overlays: list[tuple[str, str, str | None, str]] | None = None,
+) -> list[str]:
     labels: dict[str, str] = {}
     for mid, speaker in index.values():
         pub = public_voice_id(mid, speaker)
         labels[pub.lower()] = pub
+    if overlays:
+        for alias, _speaker, _hint, _preset in overlays:
+            name = alias.strip()
+            if name and name.lower() in index and name.lower() not in labels:
+                labels[name.lower()] = name
     return sorted(labels.values(), key=str.lower)
 
 

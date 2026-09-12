@@ -93,6 +93,29 @@ class ValidateVoicesDocumentTests(unittest.TestCase):
             validate_voices_document({"": "alice"})
         self.assertIn("empty alias", str(ctx.exception))
 
+    def test_strips_instructions(self):
+        out = validate_voices_document(
+            {"voices": {"n": {"speaker": "alice", "instructions": "  Male 40s  "}}}
+        )
+        self.assertEqual(out["voices"]["n"]["instructions"], "Male 40s")
+
+    def test_accepts_public_id_string(self):
+        out = validate_voices_document({"voices": {"mustaine": "mustaine-mustaine"}})
+        self.assertEqual(out["voices"]["mustaine"], "mustaine-mustaine")
+
+    def test_rejects_non_string_instructions(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_voices_document(
+                {"voices": {"n": {"speaker": "alice", "instructions": 1}}}
+            )
+        self.assertIn("instructions must be a string", str(ctx.exception))
+
+    def test_omits_blank_instructions(self):
+        out = validate_voices_document(
+            {"voices": {"n": {"speaker": "alice", "instructions": "  "}}}
+        )
+        self.assertNotIn("instructions", out["voices"]["n"])
+
 
 class WriteVoicesDocumentTests(unittest.TestCase):
     def test_round_trip(self):
@@ -100,6 +123,10 @@ class WriteVoicesDocumentTests(unittest.TestCase):
             "voices": {
                 "alice": "alice",
                 "nick": {"speaker": "bob", "model": "alpha"},
+                "narrator": {
+                    "speaker": "alpha-alice",
+                    "instructions": "Male 40s",
+                },
             }
         }
         with tempfile.TemporaryDirectory() as raw:

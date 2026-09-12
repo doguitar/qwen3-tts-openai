@@ -1,6 +1,10 @@
 {
   "voices": {
     "alice": "alice",
-    "bob": "bob"
+    "bob": "bob",
+    "narrator": {
+      "speaker": "alpha-alice",
+      "instructions": "Male, 40s, British accent, formal and refined"
+    }
   }
 }

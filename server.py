@@ -36,16 +36,20 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from device import inference_settings, select_device
 from models import (
     build_voice_index,
+    checkpoint_kind,
     checkpoint_speakers,
     default_model_id,
     discover_checkpoints,
     is_public_model_request,
     load_voices_document,
+    merge_instructions,
+    overlay_instructions,
     parse_load_policy,
     parse_voice_overlays,
     public_default_voice,
     public_voice_id,
     public_voice_names,
+    resolve_overlay_target,
     resolve_voice_route,
     validate_voices_document,
     voices_file_writable,
@@ -118,8 +122,9 @@ default_id = ""
 loaded: dict[str, Any] = {}
 speakers_by: dict[str, dict[str, str]] = {}
 default_voice_by: dict[str, str] = {}
+kind_by: dict[str, str] = {}
 voice_index: dict[str, tuple[str, str]] = {}
-voice_overlays: list[tuple[str, str, str | None]] = []
+voice_overlays: list[tuple[str, str, str | None, str]] = []
 default_voice = ""
 ready_error: str | None = None
 BODY_LOG_LIMIT = int(os.environ.get("TTS_LOG_BODY_LIMIT", "8000"))
@@ -193,7 +198,7 @@ def wav_bytes(audio: np.ndarray, sr: int) -> bytes:
     return buf.getvalue()
 
 
-def _read_overlays() -> list[tuple[str, str, str | None]]:
+def _read_overlays() -> list[tuple[str, str, str | None, str]]:
     data = None
     if VOICES_PATH.is_file():
         data = json.loads(VOICES_PATH.read_text(encoding="utf-8"))
@@ -306,6 +311,9 @@ def _refresh_speakers_maps() -> None:
         if stale not in ids:
             speakers_by.pop(stale, None)
             default_voice_by.pop(stale, None)
+    for stale in list(kind_by):
+        if stale not in ids:
+            kind_by.pop(stale, None)
     for model_id, path in catalog:
         supported = checkpoint_speakers(path)
         if model_id in loaded and hasattr(loaded[model_id], "get_supported_speakers"):
@@ -313,6 +321,7 @@ def _refresh_speakers_maps() -> None:
             if extra:
                 supported = extra
         speakers_by[model_id], default_voice_by[model_id] = _speakers_for(model_id, supported)
+        kind_by[model_id] = checkpoint_kind(path)
 
 
 def _rescan_catalog() -> dict:
@@ -330,15 +339,18 @@ def _rescan_catalog() -> dict:
         _refresh_speakers_maps()
         _reload_voice_overlays()
         print(
-            f"rescanned public={MODEL_NAME} voices={public_voice_names(voice_index)} "
+            f"rescanned public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays)} "
             f"checkpoints={catalog_ids()} default_ckpt={default_id}",
             flush=True,
         )
         return {
             "ok": True,
-            "voices": public_voice_names(voice_index),
+            "voices": public_voice_names(voice_index, voice_overlays),
             "default": default_voice,
-            "models": [{"id": i, "path": str(p), "loaded": i in loaded} for i, p in catalog],
+            "models": [
+                {"id": i, "path": str(p), "loaded": i in loaded, "kind": kind_by.get(i, "custom_voice")}
+                for i, p in catalog
+            ],
         }
 
 
@@ -358,9 +370,10 @@ def _speakers_for(model_id: str, supported: list[str]) -> tuple[dict[str, str], 
     mapping: dict[str, str] = {}
     for name in supported:
         mapping[str(name).lower()] = str(name)
-    for alias, speaker, hint in voice_overlays:
-        if hint == model_id or (hint is None and speaker.lower() in mapping):
-            mapping[alias.lower()] = mapping.get(speaker.lower(), speaker)
+    for alias, speaker, hint, _preset in voice_overlays:
+        resolved = resolve_overlay_target(speaker, hint, voice_index, catalog_ids(), default_id)
+        if resolved and resolved[0] == model_id:
+            mapping[alias.lower()] = resolved[1]
     if not mapping:
         mapping[model_id.lower()] = model_id
     env_default = os.environ.get("TTS_DEFAULT_VOICE", "").strip().lower()
@@ -387,6 +400,7 @@ def _load_one(model_id: str) -> None:
         if extra:
             supported = extra
     speakers_by[model_id], default_voice_by[model_id] = _speakers_for(model_id, supported)
+    kind_by[model_id] = checkpoint_kind(path)
     loaded[model_id] = engine
     _rebuild_voice_index()
     print(
@@ -433,16 +447,13 @@ def startup() -> None:
                 _load_one(model_id)
         elif LOAD_POLICY == "one":
             _load_one(default_id)
-        else:
-            for model_id, path in catalog:
-                supported = checkpoint_speakers(path)
-                speakers_by[model_id], default_voice_by[model_id] = _speakers_for(model_id, supported)
     except Exception as exc:
         ready_error = str(exc)
         raise
+    _refresh_speakers_maps()
     xpu_name = xpu_device_name(DEVICE)
     print(
-        f"policy={LOAD_POLICY} public={MODEL_NAME} voices={public_voice_names(voice_index)} "
+        f"policy={LOAD_POLICY} public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays)} "
         f"default_voice={default_voice} checkpoints={catalog_ids()} default_ckpt={default_id} "
         f"device={DEVICE} dtype={DTYPE_NAME} attn={ATTN} xpu={xpu_name!r}",
         flush=True,
@@ -494,7 +505,7 @@ async def ui_voices_put(request: Request):
         _refresh_speakers_maps()
         _rebuild_voice_index()
     payload = _voices_ui_payload()
-    payload["voices"] = public_voice_names(voice_index)
+    payload["voices"] = public_voice_names(voice_index, voice_overlays)
     payload["default"] = default_voice
     return payload
 
@@ -510,13 +521,16 @@ def health():
         return {"ok": False, "error": ready_error or "loading"}
     payload = {
         "ok": True,
-        "voices": public_voice_names(voice_index),
+        "voices": public_voice_names(voice_index, voice_overlays),
         "default": default_voice,
         "device": DEVICE,
         "dtype": DTYPE_NAME,
         "attn": ATTN,
         "model": MODEL_NAME,
-        "models": [{"id": i, "path": str(p), "loaded": i in loaded} for i, p in catalog],
+        "models": [
+            {"id": i, "path": str(p), "loaded": i in loaded, "kind": kind_by.get(i, "custom_voice")}
+            for i, p in catalog
+        ],
         "policy": LOAD_POLICY,
     }
     xpu_name = xpu_device_name(DEVICE)
@@ -530,10 +544,18 @@ def health():
 def openai_voices(model: str | None = None):
     if model and not is_public_model_request(model, MODEL_NAME) and model not in catalog_ids():
         raise HTTPException(status_code=400, detail=f"unknown model {model!r}")
-    names = public_voice_names(voice_index)
+    names = public_voice_names(voice_index, voice_overlays)
     return {
         "object": "list",
-        "data": [{"voice_id": n, "name": n} for n in names],
+        "data": [
+            {
+                "voice_id": n,
+                "name": n,
+                "kind": kind_by.get(voice_index.get(n.lower(), ("", ""))[0], "custom_voice"),
+                "instructions": overlay_instructions(n, voice_overlays) or None,
+            }
+            for n in names
+        ],
         "default": default_voice,
     }
 
@@ -562,6 +584,19 @@ async def http_error(request: Request, exc: HTTPException):
 async def unhandled(request: Request, exc: Exception):
     log_api_error(request, 500, repr(exc))
     return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
+
+def _generate_audio(eng, model_id: str, text: str, speaker: str, language: str, instruct: str | None):
+    kind = kind_by.get(model_id) or checkpoint_kind(_catalog_path(model_id))
+    if kind == "voice_design":
+        desc = (instruct or "").strip()
+        if not desc:
+            raise HTTPException(status_code=400, detail="voice design requires instructions")
+        if not hasattr(eng, "generate_voice_design"):
+            raise HTTPException(status_code=503, detail="qwen-tts build has no generate_voice_design")
+        return eng.generate_voice_design(text=text, language=language, instruct=desc)
+    return eng.generate_custom_voice(text=text, speaker=speaker, language=language, instruct=instruct)
 
 
 @app.post("/v1/audio/speech")
@@ -601,12 +636,9 @@ async def openai_speech(request: Request, req: OpenAISpeechRequest):
                 f"format={fmt} chars={len(text)} fallback={fell_back}",
                 flush=True,
             )
-            wavs, sr = eng.generate_custom_voice(
-                text=text,
-                speaker=speaker,
-                language=language,
-                instruct=req.instructions,
-            )
+            preset = overlay_instructions(str(req.voice or ""), voice_overlays)
+            instruct = merge_instructions(preset, req.instructions)
+            wavs, sr = _generate_audio(eng, mid, text, speaker, language, instruct)
             audio = np.asarray(wavs[0], dtype=np.float32)
     except HTTPException:
         raise

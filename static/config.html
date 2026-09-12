@@ -7,7 +7,7 @@
   <style>
     :root { color-scheme: dark; }
     body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 1.5rem; }
-    main { max-width: 720px; margin: 0 auto; }
+    main { max-width: 960px; margin: 0 auto; }
     nav { margin-bottom: 1.25rem; }
     nav a { color: #9cf; margin-right: 1rem; }
     dl { display: grid; grid-template-columns: 8rem 1fr; gap: 0.25rem 0.75rem; }
@@ -18,32 +18,37 @@
     button { font: inherit; background: #2a4a7a; color: #fff; border: 0; padding: 0.45rem 0.8rem; cursor: pointer; margin-right: 0.4rem; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     #status, #file-error, #readonly { min-height: 1.2em; }
-    #rescanned { margin-top: 1rem; white-space: pre-wrap; }
+    #live-voices { margin-top: 1rem; }
   </style>
 </head>
 <body>
   <main>
     <nav><a href="/">Generate</a><a href="/config">Config</a></nav>
-    <h1>Voices</h1>
+    <h1>Named voices</h1>
+    <p>This page edits voices.json. Each row adds a short public name. Checkpoints already appear as {folder}-{speaker} (for example mustaine-mustaine). To nickname that voice mustaine, set Public name to mustaine and Maps to to mustaine-mustaine. You will not get a mustaine-mustaine-mustaine name.</p>
     <dl>
-      <dt>path</dt><dd id="path"></dd>
-      <dt>exists</dt><dd id="exists"></dd>
-      <dt>writable</dt><dd id="writable"></dd>
-      <dt>TTS_SPEAKERS</dt><dd id="speakers_env"></dd>
+      <dt>File</dt><dd id="path"></dd>
+      <dt>File exists</dt><dd id="exists"></dd>
+      <dt>Can save</dt><dd id="writable"></dd>
+      <dt>TTS_SPEAKERS env</dt><dd id="speakers_env"></dd>
     </dl>
     <p id="file-error"></p>
     <p id="readonly"></p>
+    <h2>Your named voices</h2>
+    <p>Public name is what clients type. Maps to is either an existing public voice ({folder}-{speaker}) or a speaker id from the checkpoint (spk_id). Checkpoint folder is the directory name under /models; leave it blank when Maps to is already a public voice or the speaker exists on only one checkpoint. Preset instructions are always sent first; extra instructions from the request are appended after one space. Voice Design needs a preset or request instructions.</p>
     <table>
-      <thead><tr><th>Alias</th><th>Speaker</th><th>Model (optional)</th><th></th></tr></thead>
+      <thead><tr><th>Public name</th><th>Maps to</th><th>Checkpoint folder</th><th>Preset instructions</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <p>
-      <button type="button" id="add">Add row</button>
-      <button type="button" id="save">Save</button>
-      <button type="button" id="rescan">Rescan models</button>
+      <button type="button" id="add">Add named voice</button>
+      <button type="button" id="save">Save to voices.json</button>
+      <button type="button" id="rescan">Reload checkpoints from disk</button>
     </p>
     <p id="status"></p>
-    <div id="rescanned"></div>
+    <h2>Voices clients can use now</h2>
+    <p>These names are live (no restart). Includes {folder}-{speaker} from disk plus your public names.</p>
+    <ul id="live-voices"></ul>
   </main>
   <script>
     const rowsEl = document.getElementById("rows");
@@ -53,7 +58,7 @@
     const statusEl = document.getElementById("status");
     const fileErrorEl = document.getElementById("file-error");
     const readonlyEl = document.getElementById("readonly");
-    const rescannedEl = document.getElementById("rescanned");
+    const liveEl = document.getElementById("live-voices");
     let writable = false;
 
     function errorDetail(data, fallback) {
@@ -62,16 +67,18 @@
       return fallback;
     }
 
-    function addRow(alias, speaker, model) {
+    function addRow(alias, speaker, model, instructions) {
       const tr = document.createElement("tr");
       tr.innerHTML =
-        '<td><input data-field="alias"></td>' +
-        '<td><input data-field="speaker"></td>' +
-        '<td><input data-field="model"></td>' +
+        '<td><input data-field="alias" placeholder="mustaine"></td>' +
+        '<td><input data-field="speaker" placeholder="mustaine-mustaine"></td>' +
+        '<td><input data-field="model" placeholder=""></td>' +
+        '<td><input data-field="instructions" placeholder="Male, 40s, British accent, formal and refined"></td>' +
         '<td><button type="button" data-remove>Remove</button></td>';
       tr.querySelector('[data-field="alias"]').value = alias || "";
       tr.querySelector('[data-field="speaker"]').value = speaker || "";
       tr.querySelector('[data-field="model"]').value = model || "";
+      tr.querySelector('[data-field="instructions"]').value = instructions || "";
       tr.querySelector("[data-remove]").addEventListener("click", () => tr.remove());
       rowsEl.appendChild(tr);
       applyWritable();
@@ -81,14 +88,19 @@
       document.querySelectorAll("input, #add, #save, [data-remove]").forEach((el) => {
         el.disabled = !writable;
       });
-      readonlyEl.textContent = writable ? "" : "voices.json is not writable";
+      readonlyEl.textContent = writable
+        ? ""
+        : "Cannot save: voices.json or its folder is read-only. Remount the config path writable, or edit the file on the host.";
     }
 
     function fillMeta(data) {
       document.getElementById("path").textContent = data.path || "";
       document.getElementById("exists").textContent = String(!!data.exists);
-      document.getElementById("writable").textContent = String(!!data.writable);
-      document.getElementById("speakers_env").textContent = data.speakers_env || "";
+      document.getElementById("writable").textContent = data.writable ? "yes" : "no";
+      const env = data.speakers_env || "";
+      document.getElementById("speakers_env").textContent = env
+        ? env + " — not editable here; restart the container to change"
+        : "not editable here; restart the container to change";
       writable = !!data.writable;
       fileErrorEl.textContent = data.error || "";
     }
@@ -97,8 +109,8 @@
       rowsEl.innerHTML = "";
       const voices = (documentVoices && documentVoices.voices) || {};
       for (const [alias, spec] of Object.entries(voices)) {
-        if (typeof spec === "string") addRow(alias, spec, "");
-        else addRow(alias, (spec && spec.speaker) || "", (spec && spec.model) || "");
+        if (typeof spec === "string") addRow(alias, spec, "", "");
+        else addRow(alias, (spec && spec.speaker) || "", (spec && spec.model) || "", (spec && spec.instructions) || "");
       }
       applyWritable();
     }
@@ -109,10 +121,44 @@
         const alias = tr.querySelector('[data-field="alias"]').value.trim();
         const speaker = tr.querySelector('[data-field="speaker"]').value.trim();
         const model = tr.querySelector('[data-field="model"]').value.trim();
-        if (!alias) continue;
-        voices[alias] = model ? { speaker, model } : speaker;
+        const instructions = tr.querySelector('[data-field="instructions"]').value.trim();
+        if (!alias || !speaker) continue;
+        if (instructions) {
+          const entry = { speaker, instructions };
+          if (model) entry.model = model;
+          voices[alias] = entry;
+        } else if (model) {
+          voices[alias] = { speaker, model };
+        } else {
+          voices[alias] = speaker;
+        }
       }
       return { voices };
+    }
+
+    function rowMissingMapsTo() {
+      for (const tr of rowsEl.querySelectorAll("tr")) {
+        const alias = tr.querySelector('[data-field="alias"]').value.trim();
+        const speaker = tr.querySelector('[data-field="speaker"]').value.trim();
+        if (alias && !speaker) return true;
+        if (!alias && speaker) return true;
+      }
+      return false;
+    }
+
+    function renderLive(names) {
+      liveEl.innerHTML = "";
+      if (!names || !names.length) {
+        const li = document.createElement("li");
+        li.textContent = "none";
+        liveEl.appendChild(li);
+        return;
+      }
+      for (const name of names) {
+        const li = document.createElement("li");
+        li.textContent = name;
+        liveEl.appendChild(li);
+      }
     }
 
     function applyPayload(data) {
@@ -123,6 +169,10 @@
     saveBtn.addEventListener("click", async () => {
       if (!writable) return;
       statusEl.textContent = "";
+      if (rowMissingMapsTo()) {
+        statusEl.textContent = "each named voice needs a public name and a Maps to value";
+        return;
+      }
       try {
         const res = await fetch("/ui/voices", {
           method: "PUT",
@@ -135,13 +185,14 @@
           return;
         }
         applyPayload(data);
-        statusEl.textContent = "saved";
+        renderLive(data.voices || []);
+        statusEl.textContent = "saved — Generate and the API now include these names";
       } catch (err) {
         statusEl.textContent = String(err);
       }
     });
 
-    addBtn.addEventListener("click", () => addRow("", "", ""));
+    addBtn.addEventListener("click", () => addRow("", "", "", ""));
 
     rescanBtn.addEventListener("click", async () => {
       statusEl.textContent = "";
@@ -152,9 +203,8 @@
           statusEl.textContent = errorDetail(data, res.statusText);
           return;
         }
-        const names = data.voices || [];
-        statusEl.textContent = "rescanned";
-        rescannedEl.textContent = names.join("\n");
+        renderLive(data.voices || []);
+        statusEl.textContent = "reloaded checkpoints";
       } catch (err) {
         statusEl.textContent = String(err);
       }
@@ -162,7 +212,14 @@
 
     fetch("/ui/voices")
       .then((res) => res.json())
-      .then(applyPayload)
+      .then((data) => {
+        applyPayload(data);
+        return fetch("/v1/voices");
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        renderLive((data.data || []).map((row) => row.voice_id));
+      })
       .catch((err) => { statusEl.textContent = String(err); });
   </script>
 </body>

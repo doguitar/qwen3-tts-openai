@@ -33,7 +33,7 @@ curl http://HOST:8080/v1/audio/speech \
   --output out.mp3
 ```
 
-Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`.
+Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`. Voice Design checkpoints (`tts_model_type` `voice_design`) need a non-empty instruction (preset and/or request); the server calls `generate_voice_design` and does not use `speaker`.
 
 API errors log the request body.
 
@@ -51,13 +51,17 @@ A flat checkpoint at `/models` (`config.json` + weights) still works. Folder nam
 
 If `speech_tokenizer/model.safetensors` is missing from the checkpoint, copy it from the matching Base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base` or `1.7B-Base`). Skip `training_state.pt` for inference.
 
-Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json`:
+Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json`. A named alias is an extra public voice; `speaker` may be `{folder}-{speaker}` or a `spk_id`; request `instructions` are appended after the preset with a single space. `/config` edits that file.
 
 ```json
 {
   "voices": {
     "alice": "alice",
-    "bob": "bob"
+    "bob": "bob",
+    "narrator": {
+      "speaker": "alpha-alice",
+      "instructions": "Male, 40s, British accent, formal and refined"
+    }
   }
 }
 ```
