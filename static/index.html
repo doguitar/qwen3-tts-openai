@@ -37,8 +37,9 @@
     </div>
     <label for="text">Text</label>
     <textarea id="text" required></textarea>
-    <label for="instructions">Instructions (optional)</label>
+    <label for="instructions">Voice description / instructions</label>
     <input id="instructions" type="text">
+    <p id="instructions-hint"></p>
     <p><button type="button" id="generate">Generate</button></p>
     <p id="status"></p>
     <audio id="player" controls></audio>
@@ -57,20 +58,45 @@
 
     function setBusy(busy) {
       generateBtn.disabled = busy;
-      rescanBtn.disabled = busy;
+    }
+
+    const hintEl = document.getElementById("instructions-hint");
+
+    function selectedKind() {
+      const opt = voiceEl.selectedOptions[0];
+      return (opt && opt.dataset.kind) || "custom_voice";
+    }
+
+    function selectedPreset() {
+      const opt = voiceEl.selectedOptions[0];
+      return (opt && opt.dataset.preset) || "";
+    }
+
+    function syncInstructHint() {
+      if (selectedPreset()) {
+        hintEl.textContent = "Preset applied. Extra text is appended.";
+      } else if (selectedKind() === "voice_design") {
+        hintEl.textContent = "Voice Design: describe the voice (required). Example: Male, 40s, British accent, formal and refined.";
+      } else {
+        hintEl.textContent = "";
+      }
     }
 
     function fillVoices(data, keep) {
-      const names = (data.data || []).map((row) => row.voice_id);
+      const rows = data.data || [];
+      const names = rows.map((row) => row.voice_id);
       const preferred = keep && names.includes(keep) ? keep : (data.default || names[0] || "");
       voiceEl.innerHTML = "";
-      for (const name of names) {
+      for (const row of rows) {
         const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        if (name === preferred) opt.selected = true;
+        opt.value = row.voice_id;
+        opt.textContent = row.voice_id;
+        opt.dataset.kind = row.kind || "custom_voice";
+        opt.dataset.preset = row.instructions || "";
+        if (row.voice_id === preferred) opt.selected = true;
         voiceEl.appendChild(opt);
       }
+      syncInstructHint();
     }
 
     async function loadVoices() {
@@ -106,12 +132,10 @@
           statusEl.textContent = errorDetail(data, res.statusText);
           return;
         }
-        const names = data.voices || [];
-        fillVoices({
-          data: names.map((voice_id) => ({ voice_id })),
-          default: data.default,
-        }, keep);
-        statusEl.textContent = "rescanned " + names.length;
+        const voicesRes = await fetch("/v1/voices");
+        const voices = await voicesRes.json();
+        fillVoices(voices, keep);
+        statusEl.textContent = "rescanned " + ((voices.data || []).length);
       } catch (err) {
         statusEl.textContent = String(err);
       } finally {
@@ -125,8 +149,12 @@
         statusEl.textContent = "enter text";
         return;
       }
+      if (selectedKind() === "voice_design" && !selectedPreset() && !instructionsEl.value.trim()) {
+        statusEl.textContent = "voice design requires instructions";
+        return;
+      }
       setBusy(true);
-      statusEl.textContent = "";
+      statusEl.textContent = "generating…";
       try {
         const body = {
           model: "tts-1",
@@ -172,6 +200,7 @@
       }
     });
 
+    voiceEl.addEventListener("change", syncInstructHint);
     loadVoices().catch((err) => { statusEl.textContent = String(err); });
   </script>
 </body>

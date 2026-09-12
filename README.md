@@ -33,7 +33,7 @@ curl http://HOST:8080/v1/audio/speech \
   --output out.mp3
 ```
 
-Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`.
+Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`. Voice Design checkpoints (`tts_model_type` `voice_design`) need a non-empty instruction (preset and/or request); the server calls `generate_voice_design` and does not use `speaker`.
 
 API errors log the request body.
 
@@ -51,13 +51,17 @@ A flat checkpoint at `/models` (`config.json` + weights) still works. Folder nam
 
 If `speech_tokenizer/model.safetensors` is missing from the checkpoint, copy it from the matching Base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base` or `1.7B-Base`). Skip `training_state.pt` for inference.
 
-Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json`:
+Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`, except a unique speaker that matches its folder name is listed as that name. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json` replace the long name in `GET /v1/voices`; generate still accepts the old id. `speaker` may be `{folder}-{speaker}` or a `spk_id`; request `instructions` are appended after the preset with a single space. `/config` edits that file.
 
 ```json
 {
   "voices": {
     "alice": "alice",
-    "bob": "bob"
+    "bob": "bob",
+    "narrator": {
+      "speaker": "alpha-alice",
+      "instructions": "Male, 40s, British accent, formal and refined"
+    }
   }
 }
 ```
@@ -145,7 +149,7 @@ OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = `{fol
 
 ## Build
 
-`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. Default image is CPU (Ubuntu 22.04, Torch 2.5.1 CPU wheels). CUDA image: Torch 2.5.1 cu124. XPU image: official PyTorch `whl/xpu` wheels plus Intel Level Zero userspace. Gradio is not installed.
+`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. Default image is CPU (Ubuntu 22.04, Torch 2.5.1 CPU wheels). CUDA image: Torch 2.5.1 cu124. XPU image: official PyTorch `whl/xpu` wheels plus Intel Level Zero userspace. Gradio is not installed. Apt and Python deps are shared layers; torch is per backend; app files are the last two layers so a code-only change is a small pull.
 
 ```bash
 docker build --build-arg TORCH_BACKEND=cpu -t qwen3-tts-openai:cpu .

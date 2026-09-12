@@ -4,8 +4,13 @@
 __pycache__
 models
 config
+testdata
+tests
+unraid
 .venv
 venv
 *.wav
 *.pt
 *.safetensors
+*.pyc
+.DS_Store
