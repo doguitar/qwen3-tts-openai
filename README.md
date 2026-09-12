@@ -149,7 +149,7 @@ OpenAI-compatible clients: `http://HOST:PORT/v1`, model `tts-1`, `voice` = `{fol
 
 ## Build
 
-`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. Default image is CPU (Ubuntu 22.04, Torch 2.5.1 CPU wheels). CUDA image: Torch 2.5.1 cu124. XPU image: official PyTorch `whl/xpu` wheels plus Intel Level Zero userspace. Gradio is not installed.
+`qwen-tts==0.1.1` requires `transformers==4.57.3` and OS `sox`. Default image is CPU (Ubuntu 22.04, Torch 2.5.1 CPU wheels). CUDA image: Torch 2.5.1 cu124. XPU image: official PyTorch `whl/xpu` wheels plus Intel Level Zero userspace. Gradio is not installed. Apt and Python deps are shared layers; torch is per backend; app files are the last two layers so a code-only change is a small pull.
 
 ```bash
 docker build --build-arg TORCH_BACKEND=cpu -t qwen3-tts-openai:cpu .

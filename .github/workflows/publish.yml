@@ -48,12 +48,19 @@ jobs:
           context: .
           file: Dockerfile
           push: true
+          provenance: false
+          sbom: false
           build-args: |
             TORCH_BACKEND=cpu
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=cpu
-          cache-to: type=gha,mode=max,scope=cpu
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cpu
+            type=registry,ref=${{ env.IMAGE }}:buildcache-cpu
+            type=gha,scope=cpu
+          cache-to: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-cpu,mode=max
+            type=gha,mode=max,scope=cpu
 
   docker-cuda:
     runs-on: ubuntu-latest
@@ -90,12 +97,19 @@ jobs:
           context: .
           file: Dockerfile
           push: true
+          provenance: false
+          sbom: false
           build-args: |
             TORCH_BACKEND=cuda
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=cuda
-          cache-to: type=gha,mode=max,scope=cuda
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cuda
+            type=registry,ref=${{ env.IMAGE }}:buildcache-cuda
+            type=gha,scope=cuda
+          cache-to: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-cuda,mode=max
+            type=gha,mode=max,scope=cuda
 
   docker-xpu:
     runs-on: ubuntu-latest
@@ -132,9 +146,16 @@ jobs:
           context: .
           file: Dockerfile
           push: true
+          provenance: false
+          sbom: false
           build-args: |
             TORCH_BACKEND=xpu
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=xpu
-          cache-to: type=gha,mode=max,scope=xpu
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:xpu
+            type=registry,ref=${{ env.IMAGE }}:buildcache-xpu
+            type=gha,scope=xpu
+          cache-to: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-xpu,mode=max
+            type=gha,mode=max,scope=xpu
