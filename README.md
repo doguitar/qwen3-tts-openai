@@ -51,7 +51,7 @@ A flat checkpoint at `/models` (`config.json` + weights) still works. Folder nam
 
 If `speech_tokenizer/model.safetensors` is missing from the checkpoint, copy it from the matching Base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base` or `1.7B-Base`). Skip `training_state.pt` for inference.
 
-Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json`. A named alias is an extra public voice; `speaker` may be `{folder}-{speaker}` or a `spk_id`; request `instructions` are appended after the preset with a single space. `/config` edits that file.
+Public voices are `{folder}-{speaker}` from each checkpoint's `talker_config.spk_id`, except a unique speaker that matches its folder name is listed as that name. Optional aliases in `TTS_SPEAKERS` or `/config/voices.json` replace the long name in `GET /v1/voices`; generate still accepts the old id. `speaker` may be `{folder}-{speaker}` or a `spk_id`; request `instructions` are appended after the preset with a single space. `/config` edits that file.
 
 ```json
 {

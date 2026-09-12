@@ -25,7 +25,7 @@
   <main>
     <nav><a href="/">Generate</a><a href="/config">Config</a></nav>
     <h1>Named voices</h1>
-    <p>This page edits voices.json. Each row adds a short public name. Checkpoints already appear as {folder}-{speaker} (for example mustaine-mustaine). To nickname that voice mustaine, set Public name to mustaine and Maps to to mustaine-mustaine. You will not get a mustaine-mustaine-mustaine name.</p>
+    <p>This page edits voices.json. Each row adds a short public name. Checkpoints appear as {folder}-{speaker}, except a unique speaker that matches its folder name is listed as that name (mustaine, not mustaine-mustaine). If you add an alias, the live list shows the alias instead of the long name; the old name still works on generate.</p>
     <dl>
       <dt>File</dt><dd id="path"></dd>
       <dt>File exists</dt><dd id="exists"></dd>
@@ -47,7 +47,7 @@
     </p>
     <p id="status"></p>
     <h2>Voices clients can use now</h2>
-    <p>These names are live (no restart). Includes {folder}-{speaker} from disk plus your public names.</p>
+    <p>These names are live (no restart). Aliases replace the long name in this list. Generate still accepts the old {folder}-{speaker} id.</p>
     <ul id="live-voices"></ul>
   </main>
   <script>

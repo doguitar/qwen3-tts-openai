@@ -287,6 +287,11 @@ def build_voice_index(
         names = checkpoint_speakers(path) or [model_id]
         for name in names:
             index[public_voice_id(model_id, name).lower()] = (model_id, name)
+    pairs = _unique_pairs(index)
+    speaker_counts = _speaker_counts(pairs)
+    for mid, name in pairs:
+        if mid.lower() == name.lower() and speaker_counts[name.lower()] == 1:
+            index.setdefault(name.lower(), (mid, name))
     for alias, speaker, model_hint, _preset in overlays:
         resolved = resolve_overlay_target(speaker, model_hint, index, ids, default_id)
         if resolved is None:
@@ -297,19 +302,76 @@ def build_voice_index(
     return index
 
 
+def _unique_pairs(index: dict[str, tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for pair in index.values():
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    return out
+
+
+def _speaker_counts(pairs: list[tuple[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for _mid, speaker in pairs:
+        key = speaker.lower()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _aliases_by_pair(
+    index: dict[str, tuple[str, str]],
+    overlays: list[tuple[str, str, str | None, str]] | None,
+) -> dict[tuple[str, str], list[str]]:
+    grouped: dict[tuple[str, str], list[str]] = {}
+    if not overlays:
+        return grouped
+    for alias, _speaker, _hint, _preset in overlays:
+        name = alias.strip()
+        if not name:
+            continue
+        pair = index.get(name.lower())
+        if pair is None:
+            continue
+        names = grouped.setdefault(pair, [])
+        if name not in names:
+            names.append(name)
+    return grouped
+
+
+def _listed_name_for_pair(
+    mid: str,
+    speaker: str,
+    listed: list[str],
+    index: dict[str, tuple[str, str]],
+) -> str:
+    pair = (mid, speaker)
+    for name in listed:
+        if name.lower() in index and index[name.lower()] == pair:
+            return name
+    return public_voice_id(mid, speaker)
+
+
 def public_voice_names(
     index: dict[str, tuple[str, str]],
     overlays: list[tuple[str, str, str | None, str]] | None = None,
 ) -> list[str]:
+    pairs = _unique_pairs(index)
+    speaker_counts = _speaker_counts(pairs)
+    aliases = _aliases_by_pair(index, overlays)
     labels: dict[str, str] = {}
-    for mid, speaker in index.values():
+    for mid, speaker in pairs:
+        names = aliases.get((mid, speaker))
+        if names:
+            for name in names:
+                labels[name.lower()] = name
+            continue
+        if mid.lower() == speaker.lower() and speaker_counts[speaker.lower()] == 1:
+            labels[speaker.lower()] = speaker
+            continue
         pub = public_voice_id(mid, speaker)
         labels[pub.lower()] = pub
-    if overlays:
-        for alias, _speaker, _hint, _preset in overlays:
-            name = alias.strip()
-            if name and name.lower() in index and name.lower() not in labels:
-                labels[name.lower()] = name
     return sorted(labels.values(), key=str.lower)
 
 
@@ -317,23 +379,28 @@ def public_default_voice(
     index: dict[str, tuple[str, str]],
     requested: str,
     catalog_ids: list[str],
+    overlays: list[tuple[str, str, str | None, str]] | None = None,
 ) -> str:
-    if not index:
+    listed = public_voice_names(index, overlays)
+    if not listed:
         return ""
     requested = (requested or "").strip()
-    key = requested.lower()
-    if key in index:
-        mid, speaker = index[key]
-        return public_voice_id(mid, speaker)
-    owners = _owners_for_speaker(index, requested)
-    if len(owners) == 1:
-        return public_voice_id(owners[0], requested)
+    listed_by_key = {name.lower(): name for name in listed}
+    if requested:
+        key = requested.lower()
+        if key in listed_by_key:
+            return listed_by_key[key]
+        if key in index:
+            mid, speaker = index[key]
+            return _listed_name_for_pair(mid, speaker, listed, index)
+        owners = _owners_for_speaker(index, requested)
+        if len(owners) == 1:
+            return _listed_name_for_pair(owners[0], requested, listed, index)
     for mid in catalog_ids:
-        for model_id, speaker in index.values():
-            if model_id == mid:
-                return public_voice_id(model_id, speaker)
-    mid, speaker = next(iter(index.values()))
-    return public_voice_id(mid, speaker)
+        for name in listed:
+            if name.lower() in index and index[name.lower()][0] == mid:
+                return name
+    return listed[0]
 
 
 def resolve_voice_route(

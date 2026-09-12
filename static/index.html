@@ -58,7 +58,6 @@
 
     function setBusy(busy) {
       generateBtn.disabled = busy;
-      rescanBtn.disabled = busy;
     }
 
     const hintEl = document.getElementById("instructions-hint");
@@ -155,7 +154,7 @@
         return;
       }
       setBusy(true);
-      statusEl.textContent = "";
+      statusEl.textContent = "generating…";
       try {
         const body = {
           model: "tts-1",

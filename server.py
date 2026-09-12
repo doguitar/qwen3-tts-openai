@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import gc
 import io
 import json
@@ -295,6 +296,7 @@ def _rebuild_voice_index() -> None:
         voice_index,
         os.environ.get("TTS_DEFAULT_VOICE", ""),
         catalog_ids(),
+        voice_overlays,
     )
 
 
@@ -500,10 +502,13 @@ async def ui_voices_put(request: Request):
         write_voices_document(VOICES_PATH, document)
     except OSError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
-    with lock:
-        _reload_voice_overlays()
-        _refresh_speakers_maps()
-        _rebuild_voice_index()
+    def _reload():
+        with lock:
+            _reload_voice_overlays()
+            _refresh_speakers_maps()
+            _rebuild_voice_index()
+
+    await asyncio.to_thread(_reload)
     payload = _voices_ui_payload()
     payload["voices"] = public_voice_names(voice_index, voice_overlays)
     payload["default"] = default_voice
@@ -599,6 +604,39 @@ def _generate_audio(eng, model_id: str, text: str, speaker: str, language: str, 
     return eng.generate_custom_voice(text=text, speaker=speaker, language=language, instruct=instruct)
 
 
+def _run_speech(pin_model: str | None, voice: str, instructions: str | None, text: str, language: str, fmt: str):
+    with lock:
+        if pin_model:
+            mid = pin_model
+            eng = _ensure_engine(mid)
+            speakers = speakers_by.get(mid, {})
+            model_default = default_voice_by.get(mid, default_voice)
+            speaker, fell_back, reason = resolve_voice(voice, speakers, model_default)
+        else:
+            mid, speaker, fell_back, reason = resolve_voice_route(
+                voice,
+                voice_index,
+                default_voice,
+                OPENAI_STOCK_VOICES,
+                speaker_key,
+            )
+            if not mid:
+                raise HTTPException(status_code=503, detail="no voices")
+            eng = _ensure_engine(mid)
+        used = public_voice_id(mid, speaker)
+        print(
+            f"speech public={MODEL_NAME} model={mid} voice={voice!r} -> {used} "
+            f"format={fmt} chars={len(text)} fallback={fell_back}",
+            flush=True,
+        )
+        preset = overlay_instructions(voice, voice_overlays)
+        instruct = merge_instructions(preset, instructions)
+        wavs, sr = _generate_audio(eng, mid, text, speaker, language, instruct)
+        audio = np.asarray(wavs[0], dtype=np.float32)
+    body, media = encode_audio(audio, sr, fmt)
+    return mid, used, fell_back, reason, body, media
+
+
 @app.post("/v1/audio/speech")
 async def openai_speech(request: Request, req: OpenAISpeechRequest):
     if not catalog:
@@ -612,39 +650,19 @@ async def openai_speech(request: Request, req: OpenAISpeechRequest):
     language = req.language or DEFAULT_LANGUAGE
     pin_model = req.model if req.model in catalog_ids() and not is_public_model_request(req.model, MODEL_NAME) else None
     try:
-        with lock:
-            if pin_model:
-                mid = pin_model
-                eng = _ensure_engine(mid)
-                speakers = speakers_by.get(mid, {})
-                model_default = default_voice_by.get(mid, default_voice)
-                speaker, fell_back, reason = resolve_voice(str(req.voice or ""), speakers, model_default)
-            else:
-                mid, speaker, fell_back, reason = resolve_voice_route(
-                    str(req.voice or ""),
-                    voice_index,
-                    default_voice,
-                    OPENAI_STOCK_VOICES,
-                    speaker_key,
-                )
-                if not mid:
-                    raise HTTPException(status_code=503, detail="no voices")
-                eng = _ensure_engine(mid)
-            used = public_voice_id(mid, speaker)
-            print(
-                f"speech public={MODEL_NAME} model={mid} voice={req.voice!r} -> {used} "
-                f"format={fmt} chars={len(text)} fallback={fell_back}",
-                flush=True,
-            )
-            preset = overlay_instructions(str(req.voice or ""), voice_overlays)
-            instruct = merge_instructions(preset, req.instructions)
-            wavs, sr = _generate_audio(eng, mid, text, speaker, language, instruct)
-            audio = np.asarray(wavs[0], dtype=np.float32)
+        mid, used, fell_back, reason, body, media = await asyncio.to_thread(
+            _run_speech,
+            pin_model,
+            str(req.voice or ""),
+            req.instructions,
+            text,
+            language,
+            fmt,
+        )
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    body, media = encode_audio(audio, sr, fmt)
     headers = {"X-TTS-Voice-Used": used, "X-TTS-Model": mid}
     if fell_back:
         headers["X-TTS-Fell-Back"] = "1"

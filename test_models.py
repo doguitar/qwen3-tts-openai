@@ -165,6 +165,37 @@ class VoiceIndexTests(unittest.TestCase):
                 ["alpha-alice", "cast-alice", "cast-bob"],
             )
 
+    def test_unique_matching_folder_and_speaker_short_name(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _write_spk_config(root / "mustaine", {"mustaine": 3000})
+            _write_spk_config(root / "alpha", {"alice": 3000})
+            catalog = [
+                ("alpha", root / "alpha"),
+                ("mustaine", root / "mustaine"),
+            ]
+            index = build_voice_index(catalog, [], "alpha")
+            self.assertEqual(index["mustaine"], ("mustaine", "mustaine"))
+            self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
+            self.assertEqual(public_voice_names(index), ["alpha-alice", "mustaine"])
+            self.assertEqual(
+                public_default_voice(index, "", ["alpha", "mustaine"]),
+                "alpha-alice",
+            )
+            self.assertEqual(
+                public_default_voice(index, "mustaine-mustaine", ["alpha", "mustaine"]),
+                "mustaine",
+            )
+
+            _write_spk_config(root / "other", {"mustaine": 3001})
+            catalog_clash = catalog + [("other", root / "other")]
+            clash = build_voice_index(catalog_clash, [], "alpha")
+            self.assertNotIn("mustaine", clash)
+            self.assertEqual(
+                public_voice_names(clash),
+                ["alpha-alice", "mustaine-mustaine", "other-mustaine"],
+            )
+
     def test_overlay_public_id_short_name(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -174,10 +205,10 @@ class VoiceIndexTests(unittest.TestCase):
             index = build_voice_index(catalog, overlays, "mustaine")
             self.assertEqual(index["mustaine"], ("mustaine", "mustaine"))
             self.assertEqual(index["mustaine-mustaine"], ("mustaine", "mustaine"))
-            self.assertEqual(public_voice_names(index), ["mustaine-mustaine"])
-            self.assertEqual(public_voice_names(index, overlays), ["mustaine", "mustaine-mustaine"])
+            self.assertEqual(public_voice_names(index), ["mustaine"])
+            self.assertEqual(public_voice_names(index, overlays), ["mustaine"])
             self.assertNotIn("mustaine-mustaine-mustaine", index)
-            self.assertNotIn("mustaine-mustaine-mustaine", public_voice_names(index, overlays))
+            self.assertNotIn("mustaine-mustaine", public_voice_names(index, overlays))
 
             overlays_obj = parse_voice_overlays(
                 {"voices": {"mustaine": {"speaker": "mustaine-mustaine"}}},
@@ -214,6 +245,7 @@ class VoiceIndexTests(unittest.TestCase):
             self.assertEqual(index["nickname"], ("alpha", "alice"))
             self.assertEqual(index["alpha-alice"], ("alpha", "alice"))
             self.assertEqual(public_voice_names(index), ["alpha-alice"])
+            self.assertEqual(public_voice_names(index, overlays), ["alice", "nickname"])
 
     def test_resolve_voice_route(self):
         index = {
