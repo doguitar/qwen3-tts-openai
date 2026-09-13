@@ -855,7 +855,11 @@ def _run_speech(
 
 
 def _speech_response(mid, used, fell_back, reason, body, media):
-    return _speech_response(mid, used, fell_back, reason, body, media)
+    headers = {"X-TTS-Voice-Used": used, "X-TTS-Model": mid}
+    if fell_back:
+        headers["X-TTS-Fell-Back"] = "1"
+        headers["X-TTS-Fell-Back-Reason"] = reason
+    return Response(content=body, media_type=media, headers=headers)
 
 
 def _pin_base_model(requested: str | None) -> str | None:
