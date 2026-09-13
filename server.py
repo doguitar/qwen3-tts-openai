@@ -558,15 +558,7 @@ async def ui_clone_preset(request: Request):
         raise HTTPException(status_code=400, detail="clone requires ref_text")
     model = str(form.get("model") or "").strip()
     upload = form.get("ref_audio")
-    filename = getattr(upload, "filename", "") or ""
-    content_type = getattr(upload, "content_type", "") or ""
-    if upload is None or not hasattr(upload, "read"):
-        raise HTTPException(status_code=400, detail="clone requires a wav file")
-    if not (filename.lower().endswith(".wav") or content_type in {"audio/wav", "audio/x-wav"}):
-        raise HTTPException(status_code=400, detail="clone requires a wav file")
-    raw = await upload.read()
-    if not raw or len(raw) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    raw = await _read_clone_wav(upload)
     CLONES_DIR.mkdir(parents=True, exist_ok=True)
     dest = CLONES_DIR / f"{alias}.wav"
     dest.write_bytes(raw)
@@ -699,9 +691,36 @@ async def unhandled(request: Request, exc: Exception):
 
 
 
+CLONE_WAV_MAX = 50 * 1024 * 1024
+_WAV_TYPES = {"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"}
+
+
 def _safe_alias(name: str) -> str:
     cleaned = "".join(ch for ch in (name or "") if ch.isalnum() or ch in "._-")
     return cleaned[:64]
+
+
+def _is_wav_upload(filename: str, content_type: str, raw: bytes) -> bool:
+    name = (filename or "").lower()
+    ctype = (content_type or "").split(";", 1)[0].strip().lower()
+    if name.endswith(".wav") or name.endswith(".wave") or ctype in _WAV_TYPES:
+        return True
+    return raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"
+
+
+async def _read_clone_wav(upload) -> bytes:
+    filename = getattr(upload, "filename", "") or ""
+    content_type = getattr(upload, "content_type", "") or ""
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    raw = await upload.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    if len(raw) > CLONE_WAV_MAX:
+        raise HTTPException(status_code=400, detail="clone wav must be 50MB or smaller")
+    if not _is_wav_upload(filename, content_type, raw):
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    return raw
 
 
 def _path_under(path: Path, root: Path) -> bool:
@@ -858,17 +877,9 @@ async def _openai_speech_multipart(request: Request):
     instructions = str(instructions) if instructions is not None else None
     ref_text = str(form.get("ref_text") or "").strip()
     upload = form.get("ref_audio")
-    filename = getattr(upload, "filename", "") or ""
-    content_type = getattr(upload, "content_type", "") or ""
-    if upload is None or not hasattr(upload, "read"):
+    if upload is None or not hasattr(upload, "read") or not ref_text:
         raise HTTPException(status_code=400, detail="clone requires ref_audio and ref_text")
-    if not ref_text:
-        raise HTTPException(status_code=400, detail="clone requires ref_audio and ref_text")
-    if not (filename.lower().endswith(".wav") or content_type in {"audio/wav", "audio/x-wav"}):
-        raise HTTPException(status_code=400, detail="clone requires a wav file")
-    raw = await upload.read()
-    if not raw or len(raw) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    raw = await _read_clone_wav(upload)
     tmp_dir = CLONES_DIR if CLONES_DIR.parent.is_dir() else Path(tempfile.gettempdir())
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=str(tmp_dir))
