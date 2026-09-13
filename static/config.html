@@ -23,7 +23,7 @@
 </head>
 <body>
   <main>
-    <nav><a href="/">Generate</a><a href="/config">Config</a></nav>
+    <nav><a href="/">Speakers</a><a href="/design">Design</a><a href="/clone">Clone</a><a href="/config">Config</a></nav>
     <h1>Named voices</h1>
     <p>This page edits voices.json. Each row adds a short public name. Checkpoints appear as {folder}-{speaker}, except a unique speaker that matches its folder name is listed as that name (mustaine, not mustaine-mustaine). If you add an alias, the live list shows the alias instead of the long name; the old name still works on generate.</p>
     <dl>
@@ -45,6 +45,13 @@
       <button type="button" id="save">Save to voices.json</button>
       <button type="button" id="rescan">Reload checkpoints from disk</button>
     </p>
+    <h2>Clone presets</h2>
+    <p>A clone preset is a public name plus a wav and the transcript of that wav. It uses a Base checkpoint. Upload is required when you add or replace the wav. These names appear on Speakers and GET /v1/voices.</p>
+    <table>
+      <thead><tr><th>Public name</th><th>Checkpoint folder</th><th>Transcript</th><th>Wav</th><th></th></tr></thead>
+      <tbody id="clone-rows"></tbody>
+    </table>
+    <p><button type="button" id="add-clone">Add clone preset</button></p>
     <p id="status"></p>
     <h2>Voices clients can use now</h2>
     <p>These names are live (no restart). Aliases replace the long name in this list. Generate still accepts the old {folder}-{speaker} id.</p>
@@ -52,7 +59,9 @@
   </main>
   <script>
     const rowsEl = document.getElementById("rows");
+    const cloneRowsEl = document.getElementById("clone-rows");
     const addBtn = document.getElementById("add");
+    const addCloneBtn = document.getElementById("add-clone");
     const saveBtn = document.getElementById("save");
     const rescanBtn = document.getElementById("rescan");
     const statusEl = document.getElementById("status");
@@ -60,6 +69,7 @@
     const readonlyEl = document.getElementById("readonly");
     const liveEl = document.getElementById("live-voices");
     let writable = false;
+    let serverVoices = {};
 
     function errorDetail(data, fallback) {
       if (data && typeof data.detail === "string") return data.detail;
@@ -105,10 +115,52 @@
       fileErrorEl.textContent = data.error || "";
     }
 
+    function addCloneRow(alias, model, refText, refAudio) {
+      const tr = document.createElement("tr");
+      tr.dataset.existing = refAudio || "";
+      tr.innerHTML =
+        '<td><input data-field="alias" placeholder="jane"></td>' +
+        '<td><input data-field="model" placeholder=""></td>' +
+        '<td><input data-field="ref_text" placeholder="Hello there."></td>' +
+        '<td><span data-existing></span><input data-field="wav" type="file" accept="audio/wav,.wav"></td>' +
+        '<td><button type="button" data-remove-clone>Remove</button></td>';
+      tr.querySelector('[data-field="alias"]').value = alias || "";
+      tr.querySelector('[data-field="model"]').value = model || "";
+      tr.querySelector('[data-field="ref_text"]').value = refText || "";
+      tr.querySelector("[data-existing]").textContent = refAudio || "";
+      tr.querySelector("[data-remove-clone]").addEventListener("click", async () => {
+        const name = tr.querySelector('[data-field="alias"]').value.trim();
+        if (name && serverVoices[name] && serverVoices[name].kind === "voice_clone") {
+          try {
+            const res = await fetch("/ui/clone-preset/" + encodeURIComponent(name), { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) {
+              statusEl.textContent = errorDetail(data, res.statusText);
+              return;
+            }
+            applyPayload(data);
+            renderLive(data.voices || []);
+          } catch (err) {
+            statusEl.textContent = String(err);
+            return;
+          }
+        }
+        tr.remove();
+      });
+      cloneRowsEl.appendChild(tr);
+      applyWritable();
+    }
+
     function fillTable(documentVoices) {
       rowsEl.innerHTML = "";
+      cloneRowsEl.innerHTML = "";
       const voices = (documentVoices && documentVoices.voices) || {};
+      serverVoices = voices;
       for (const [alias, spec] of Object.entries(voices)) {
+        if (spec && typeof spec === "object" && spec.kind === "voice_clone") {
+          addCloneRow(alias, spec.model || "", spec.ref_text || "", spec.ref_audio || "");
+          continue;
+        }
         if (typeof spec === "string") addRow(alias, spec, "", "");
         else addRow(alias, (spec && spec.speaker) || "", (spec && spec.model) || "", (spec && spec.instructions) || "");
       }
@@ -173,26 +225,84 @@
         statusEl.textContent = "each named voice needs a public name and a Maps to value";
         return;
       }
+      const named = collectVoices().voices;
+      const merged = {};
+      for (const [alias, spec] of Object.entries(serverVoices || {})) {
+        if (spec && typeof spec === "object" && spec.kind === "voice_clone") merged[alias] = spec;
+      }
+      Object.assign(merged, named);
+      const uploads = [];
+      for (const tr of cloneRowsEl.querySelectorAll("tr")) {
+        const alias = tr.querySelector('[data-field="alias"]').value.trim();
+        const refText = tr.querySelector('[data-field="ref_text"]').value.trim();
+        const model = tr.querySelector('[data-field="model"]').value.trim();
+        const file = tr.querySelector('[data-field="wav"]').files[0];
+        const existing = tr.dataset.existing || "";
+        if (!alias || !refText) {
+          statusEl.textContent = "each clone preset needs a public name and a transcript";
+          return;
+        }
+        if (!file && !existing) {
+          statusEl.textContent = "each clone preset needs a public name and a transcript and a wav";
+          return;
+        }
+        if (file) {
+          uploads.push({ alias, refText, model, file });
+        } else {
+          const entry = { kind: "voice_clone", ref_audio: existing, ref_text: refText };
+          if (model) entry.model = model;
+          merged[alias] = entry;
+        }
+      }
+      const kept = new Set();
+      for (const tr of cloneRowsEl.querySelectorAll("tr")) {
+        const alias = tr.querySelector('[data-field="alias"]').value.trim();
+        if (alias) kept.add(alias);
+      }
+      for (const key of Object.keys(merged)) {
+        const spec = merged[key];
+        if (spec && typeof spec === "object" && spec.kind === "voice_clone" && !kept.has(key) && !uploads.some((u) => u.alias === key)) {
+          delete merged[key];
+        }
+      }
       try {
         const res = await fetch("/ui/voices", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(collectVoices()),
+          body: JSON.stringify({ voices: merged }),
         });
         const data = await res.json();
         if (!res.ok) {
           statusEl.textContent = errorDetail(data, res.statusText);
           return;
         }
-        applyPayload(data);
-        renderLive(data.voices || []);
-        statusEl.textContent = "saved — Generate and the API now include these names";
+        for (const item of uploads) {
+          const fd = new FormData();
+          fd.append("alias", item.alias);
+          fd.append("ref_text", item.refText);
+          if (item.model) fd.append("model", item.model);
+          fd.append("ref_audio", item.file);
+          const cres = await fetch("/ui/clone-preset", { method: "POST", body: fd });
+          const cdata = await cres.json();
+          if (!cres.ok) {
+            statusEl.textContent = errorDetail(cdata, cres.statusText);
+            return;
+          }
+          applyPayload(cdata);
+          renderLive(cdata.voices || []);
+        }
+        if (!uploads.length) {
+          applyPayload(data);
+          renderLive(data.voices || []);
+        }
+        statusEl.textContent = "saved — Speakers and the API now include these names";
       } catch (err) {
         statusEl.textContent = String(err);
       }
     });
 
     addBtn.addEventListener("click", () => addRow("", "", "", ""));
+    addCloneBtn.addEventListener("click", () => addCloneRow("", "", "", ""));
 
     rescanBtn.addEventListener("click", async () => {
       statusEl.textContent = "";

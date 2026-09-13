@@ -5,6 +5,11 @@
     "narrator": {
       "speaker": "alpha-alice",
       "instructions": "Male, 40s, British accent, formal and refined"
+    },
+    "clone-jane": {
+      "kind": "voice_clone",
+      "ref_audio": "clones/clone-jane.wav",
+      "ref_text": "Okay. Yeah. I resent you."
     }
   }
 }

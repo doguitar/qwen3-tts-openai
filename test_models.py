@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from models import (
+    VoiceOverlay,
     build_voice_index,
     checkpoint_kind,
     checkpoint_speakers,
@@ -12,7 +13,9 @@ from models import (
     discover_checkpoints,
     is_public_model_request,
     merge_instructions,
+    overlay_clone_ref,
     overlay_instructions,
+    overlay_kind,
     parse_load_policy,
     parse_voice_overlays,
     public_default_voice,
@@ -228,7 +231,7 @@ class VoiceIndexTests(unittest.TestCase):
         self.assertEqual(merge_instructions("Male 40s", ""), "Male 40s")
         self.assertEqual(merge_instructions("", "whisper"), "whisper")
         self.assertIsNone(merge_instructions("  ", None))
-        overlays = [("Narrator", "alice", "alpha", "Male 40s")]
+        overlays = [VoiceOverlay("Narrator", "alice", "alpha", "Male 40s", "", "", "")]
         self.assertEqual(overlay_instructions("narrator", overlays), "Male 40s")
         self.assertEqual(overlay_instructions("missing", overlays), "")
 
@@ -330,6 +333,92 @@ class CheckpointKindTests(unittest.TestCase):
             root = Path(raw)
             (root / "config.json").write_text("{", encoding="utf-8")
             self.assertEqual(checkpoint_kind(root), "custom_voice")
+
+    def test_base_kind(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "config.json").write_text(
+                json.dumps({"tts_model_type": "base"}), encoding="utf-8"
+            )
+            self.assertEqual(checkpoint_kind(root), "base")
+
+
+class VoiceCloneIndexTests(unittest.TestCase):
+    def _base_catalog(self, root: Path, folders: list[str]) -> list[tuple[str, Path]]:
+        catalog = []
+        for name in folders:
+            path = root / name
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "config.json").write_text(
+                json.dumps({"tts_model_type": "base", "talker_config": {"spk_id": {}}}),
+                encoding="utf-8",
+            )
+            (path / "model.safetensors").write_bytes(b"")
+            catalog.append((name, path))
+        return catalog
+
+    def test_clone_overlay_unique_base(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            catalog = self._base_catalog(root, ["qbase"])
+            overlays = parse_voice_overlays(
+                {
+                    "voices": {
+                        "jane": {
+                            "kind": "voice_clone",
+                            "ref_audio": "clones/jane.wav",
+                            "ref_text": "Hello there.",
+                        }
+                    }
+                },
+                "",
+            )
+            index = build_voice_index(catalog, overlays, "qbase")
+            self.assertEqual(index["jane"], ("qbase", "jane"))
+            self.assertEqual(public_voice_names(index, overlays), ["jane"])
+            self.assertNotIn("qbase-jane", public_voice_names(index, overlays))
+            self.assertEqual(overlay_kind("jane", overlays), "voice_clone")
+            self.assertEqual(overlay_clone_ref("jane", overlays), ("clones/jane.wav", "Hello there."))
+
+    def test_clone_skipped_without_model_when_two_bases(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            catalog = self._base_catalog(root, ["qbase", "qbase2"])
+            overlays = parse_voice_overlays(
+                {
+                    "voices": {
+                        "jane": {
+                            "kind": "voice_clone",
+                            "ref_audio": "clones/jane.wav",
+                            "ref_text": "Hello there.",
+                        }
+                    }
+                },
+                "",
+            )
+            index = build_voice_index(catalog, overlays, "qbase")
+            self.assertNotIn("jane", index)
+
+    def test_clone_explicit_model_with_two_bases(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            catalog = self._base_catalog(root, ["qbase", "qbase2"])
+            overlays = parse_voice_overlays(
+                {
+                    "voices": {
+                        "jane": {
+                            "kind": "voice_clone",
+                            "model": "qbase",
+                            "ref_audio": "clones/jane.wav",
+                            "ref_text": "Hello there.",
+                        }
+                    }
+                },
+                "",
+            )
+            index = build_voice_index(catalog, overlays, "qbase")
+            self.assertEqual(index["jane"], ("qbase", "jane"))
+
 
 
 if __name__ == "__main__":

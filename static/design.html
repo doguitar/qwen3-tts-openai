@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Speakers</title>
+  <title>Design</title>
   <style>
     :root { color-scheme: dark; }
     body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 1.5rem; }
@@ -29,7 +29,7 @@
 <body>
   <main>
     <nav><a href="/">Speakers</a><a href="/design">Design</a><a href="/clone">Clone</a><a href="/config">Config</a></nav>
-    <h1>Speakers</h1>
+    <h1>Design</h1>
     <label for="voice">Voice</label>
     <div class="row">
       <select id="voice"></select>
@@ -76,21 +76,16 @@
 
     function syncInstructHint() {
       const row = document.getElementById("instructions-row");
-      if (selectedKind() === "voice_clone") {
-        hintEl.textContent = "Clone preset. Uses the stored wav and transcript.";
-        if (row) row.style.display = "none";
-        return;
-      }
       if (row) row.style.display = "";
       if (selectedPreset()) {
         hintEl.textContent = "Preset applied. Extra text is appended.";
       } else {
-        hintEl.textContent = "";
+        hintEl.textContent = "Voice Design: describe the voice (required). Example: Male, 40s, British accent, formal and refined.";
       }
     }
 
     function fillVoices(data, keep) {
-      const rows = (data.data || []).filter((row) => row.kind !== "voice_design" && row.kind !== "base");
+      const rows = (data.data || []).filter((row) => row.kind === "voice_design");
       const names = rows.map((row) => row.voice_id);
       const preferred = keep && names.includes(keep) ? keep : (data.default || names[0] || "");
       voiceEl.innerHTML = "";
@@ -104,6 +99,12 @@
         voiceEl.appendChild(opt);
       }
       syncInstructHint();
+      if (!rows.length) {
+        statusEl.textContent = "no voice design checkpoint";
+        generateBtn.disabled = true;
+      } else {
+        generateBtn.disabled = false;
+      }
     }
 
     async function loadVoices() {
