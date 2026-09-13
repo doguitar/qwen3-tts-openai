@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clone</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 1.5rem; }
+    main { max-width: 720px; margin: 0 auto; }
+    nav { margin-bottom: 1.25rem; }
+    nav a { color: #9cf; margin-right: 1rem; }
+    label { display: block; margin: 0.75rem 0 0.25rem; }
+    select, textarea, input, button { font: inherit; }
+    select, textarea, input[type="text"] {
+      width: 100%; box-sizing: border-box; background: #1c1c1c; color: #eee;
+      border: 1px solid #444; padding: 0.5rem;
+    }
+    textarea { min-height: 8rem; }
+    button { background: #2a4a7a; color: #fff; border: 0; padding: 0.5rem 0.9rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    #status { min-height: 1.4em; }
+    #player, #download { display: none; margin-top: 0.75rem; }
+    #download { color: #9cf; }
+    #model-row { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="/">Speakers</a><a href="/design">Design</a><a href="/clone">Clone</a><a href="/config">Config</a></nav>
+    <h1>Clone</h1>
+    <div id="model-row">
+      <label for="model">Base checkpoint</label>
+      <select id="model"></select>
+    </div>
+    <label for="text">Text</label>
+    <textarea id="text" required></textarea>
+    <label for="ref_text">Transcript of the reference wav</label>
+    <textarea id="ref_text" required></textarea>
+    <label for="ref_audio">Reference wav</label>
+    <input id="ref_audio" type="file" accept="audio/wav,.wav" required>
+    <p><button type="button" id="generate">Generate</button></p>
+    <p id="status"></p>
+    <audio id="player" controls></audio>
+    <a id="download" download="clip.mp3">Download MP3</a>
+  </main>
+  <script>
+    const textEl = document.getElementById("text");
+    const refTextEl = document.getElementById("ref_text");
+    const refAudioEl = document.getElementById("ref_audio");
+    const modelRow = document.getElementById("model-row");
+    const modelEl = document.getElementById("model");
+    const generateBtn = document.getElementById("generate");
+    const statusEl = document.getElementById("status");
+    const player = document.getElementById("player");
+    const download = document.getElementById("download");
+    let objectUrl = null;
+    let baseCount = 0;
+
+    function errorDetail(data, fallback) {
+      if (data && typeof data.detail === "string") return data.detail;
+      if (data && data.detail != null) return JSON.stringify(data.detail);
+      return fallback;
+    }
+
+    function revokeBlob() {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      player.removeAttribute("src");
+      player.style.display = "none";
+      download.style.display = "none";
+    }
+
+    fetch("/health").then((res) => res.json()).then((data) => {
+      const bases = (data.models || []).filter((row) => row.kind === "base");
+      baseCount = bases.length;
+      modelEl.innerHTML = "";
+      for (const row of bases) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.textContent = row.id;
+        modelEl.appendChild(opt);
+      }
+      modelRow.style.display = bases.length > 1 ? "block" : "none";
+      if (!bases.length) {
+        statusEl.textContent = "voice clone requires a base checkpoint";
+        generateBtn.disabled = true;
+      }
+    }).catch((err) => { statusEl.textContent = String(err); });
+
+    generateBtn.addEventListener("click", async () => {
+      const text = textEl.value.trim();
+      const refText = refTextEl.value.trim();
+      const file = refAudioEl.files && refAudioEl.files[0];
+      if (!text || !refText || !file) {
+        statusEl.textContent = "clone requires a wav and transcript";
+        return;
+      }
+      generateBtn.disabled = true;
+      statusEl.textContent = "generating…";
+      try {
+        const body = new FormData();
+        body.append("input", text);
+        body.append("ref_text", refText);
+        body.append("ref_audio", file);
+        body.append("response_format", "mp3");
+        if (modelEl.value) body.append("model", modelEl.value);
+        const res = await fetch("/v1/audio/speech", { method: "POST", body });
+        if (!res.ok) {
+          revokeBlob();
+          let data = null;
+          try { data = await res.json(); } catch (_) {}
+          statusEl.textContent = errorDetail(data, res.statusText);
+          return;
+        }
+        const blob = await res.blob();
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = URL.createObjectURL(blob);
+        player.src = objectUrl;
+        player.style.display = "block";
+        download.href = objectUrl;
+        download.download = "clone.mp3";
+        download.style.display = "inline";
+        statusEl.textContent = "ok";
+      } catch (err) {
+        revokeBlob();
+        statusEl.textContent = String(err);
+      } finally {
+        generateBtn.disabled = baseCount === 0;
+      }
+    });
+  </script>
+</body>
+</html>

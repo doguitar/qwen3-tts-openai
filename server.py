@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from device import inference_settings, select_device
 from models import (
+    VoiceOverlay,
     build_voice_index,
     checkpoint_kind,
     checkpoint_speakers,
@@ -44,7 +46,9 @@ from models import (
     is_public_model_request,
     load_voices_document,
     merge_instructions,
+    overlay_clone_ref,
     overlay_instructions,
+    overlay_kind,
     parse_load_policy,
     parse_voice_overlays,
     public_default_voice,
@@ -86,6 +90,7 @@ HOST = os.environ.get("TTS_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TTS_PORT", "8080"))
 MODEL_PATH = os.environ.get("TTS_MODEL", os.environ.get("MODEL_PATH", "/models"))
 VOICES_PATH = Path(os.environ.get("TTS_VOICES", "/config/voices.json"))
+CLONES_DIR = VOICES_PATH.parent / "clones"
 DEFAULT_LANGUAGE = os.environ.get("TTS_LANGUAGE", "English")
 MODEL_NAME = os.environ.get("TTS_MODEL_NAME", "tts-1")
 LOAD_POLICY = parse_load_policy(os.environ.get("TTS_LOAD_POLICY", ""))
@@ -125,7 +130,7 @@ speakers_by: dict[str, dict[str, str]] = {}
 default_voice_by: dict[str, str] = {}
 kind_by: dict[str, str] = {}
 voice_index: dict[str, tuple[str, str]] = {}
-voice_overlays: list[tuple[str, str, str | None, str]] = []
+voice_overlays: list[VoiceOverlay] = []
 default_voice = ""
 ready_error: str | None = None
 BODY_LOG_LIMIT = int(os.environ.get("TTS_LOG_BODY_LIMIT", "8000"))
@@ -199,7 +204,7 @@ def wav_bytes(audio: np.ndarray, sr: int) -> bytes:
     return buf.getvalue()
 
 
-def _read_overlays() -> list[tuple[str, str, str | None, str]]:
+def _read_overlays() -> list[VoiceOverlay]:
     data = None
     if VOICES_PATH.is_file():
         data = json.loads(VOICES_PATH.read_text(encoding="utf-8"))
@@ -341,13 +346,13 @@ def _rescan_catalog() -> dict:
         _refresh_speakers_maps()
         _reload_voice_overlays()
         print(
-            f"rescanned public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays)} "
+            f"rescanned public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays, catalog)} "
             f"checkpoints={catalog_ids()} default_ckpt={default_id}",
             flush=True,
         )
         return {
             "ok": True,
-            "voices": public_voice_names(voice_index, voice_overlays),
+            "voices": public_voice_names(voice_index, voice_overlays, catalog),
             "default": default_voice,
             "models": [
                 {"id": i, "path": str(p), "loaded": i in loaded, "kind": kind_by.get(i, "custom_voice")}
@@ -372,10 +377,12 @@ def _speakers_for(model_id: str, supported: list[str]) -> tuple[dict[str, str], 
     mapping: dict[str, str] = {}
     for name in supported:
         mapping[str(name).lower()] = str(name)
-    for alias, speaker, hint, _preset in voice_overlays:
-        resolved = resolve_overlay_target(speaker, hint, voice_index, catalog_ids(), default_id)
+    for item in voice_overlays:
+        if item.kind == "voice_clone":
+            continue
+        resolved = resolve_overlay_target(item.speaker, item.model, voice_index, catalog_ids(), default_id)
         if resolved and resolved[0] == model_id:
-            mapping[alias.lower()] = resolved[1]
+            mapping[item.alias.lower()] = resolved[1]
     if not mapping:
         mapping[model_id.lower()] = model_id
     env_default = os.environ.get("TTS_DEFAULT_VOICE", "").strip().lower()
@@ -455,7 +462,7 @@ def startup() -> None:
     _refresh_speakers_maps()
     xpu_name = xpu_device_name(DEVICE)
     print(
-        f"policy={LOAD_POLICY} public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays)} "
+        f"policy={LOAD_POLICY} public={MODEL_NAME} voices={public_voice_names(voice_index, voice_overlays, catalog)} "
         f"default_voice={default_voice} checkpoints={catalog_ids()} default_ckpt={default_id} "
         f"device={DEVICE} dtype={DTYPE_NAME} attn={ATTN} xpu={xpu_name!r}",
         flush=True,
@@ -466,6 +473,22 @@ def startup() -> None:
 @app.get("/")
 def ui_index():
     path = STATIC_DIR / "index.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="ui missing")
+    return FileResponse(path)
+
+
+@app.get("/design")
+def ui_design():
+    path = STATIC_DIR / "design.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="ui missing")
+    return FileResponse(path)
+
+
+@app.get("/clone")
+def ui_clone():
+    path = STATIC_DIR / "clone.html"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="ui missing")
     return FileResponse(path)
@@ -510,7 +533,83 @@ async def ui_voices_put(request: Request):
 
     await asyncio.to_thread(_reload)
     payload = _voices_ui_payload()
-    payload["voices"] = public_voice_names(voice_index, voice_overlays)
+    payload["voices"] = public_voice_names(voice_index, voice_overlays, catalog)
+    payload["default"] = default_voice
+    return payload
+
+
+def _reload_voices_locked():
+    with lock:
+        _reload_voice_overlays()
+        _refresh_speakers_maps()
+        _rebuild_voice_index()
+
+
+@app.post("/ui/clone-preset")
+async def ui_clone_preset(request: Request):
+    if not voices_file_writable(VOICES_PATH):
+        raise HTTPException(status_code=403, detail="voices.json is not writable")
+    form = await request.form()
+    alias = _safe_alias(str(form.get("alias") or ""))
+    if not alias:
+        raise HTTPException(status_code=400, detail="clone requires a public name")
+    ref_text = str(form.get("ref_text") or "").strip()
+    if not ref_text:
+        raise HTTPException(status_code=400, detail="clone requires ref_text")
+    model = str(form.get("model") or "").strip()
+    upload = form.get("ref_audio")
+    raw = await _read_clone_wav(upload)
+    CLONES_DIR.mkdir(parents=True, exist_ok=True)
+    dest = CLONES_DIR / f"{alias}.wav"
+    dest.write_bytes(raw)
+    document, _error = load_voices_document(VOICES_PATH)
+    voices = dict(document.get("voices") or {})
+    entry = {"kind": "voice_clone", "ref_audio": f"clones/{alias}.wav", "ref_text": ref_text}
+    if model:
+        entry["model"] = model
+    voices[alias] = entry
+    try:
+        document = validate_voices_document({"voices": voices})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        write_voices_document(VOICES_PATH, document)
+    except OSError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    await asyncio.to_thread(_reload_voices_locked)
+    payload = _voices_ui_payload()
+    payload["voices"] = public_voice_names(voice_index, voice_overlays, catalog)
+    payload["default"] = default_voice
+    return payload
+
+
+@app.delete("/ui/clone-preset/{alias}")
+async def ui_clone_preset_delete(alias: str):
+    if not voices_file_writable(VOICES_PATH):
+        raise HTTPException(status_code=403, detail="voices.json is not writable")
+    safe = _safe_alias(alias)
+    if not safe:
+        raise HTTPException(status_code=400, detail="clone requires a public name")
+    wav = CLONES_DIR / f"{safe}.wav"
+    if wav.is_file():
+        try:
+            wav.unlink()
+        except OSError:
+            pass
+    document, _error = load_voices_document(VOICES_PATH)
+    voices = dict(document.get("voices") or {})
+    voices.pop(safe, None)
+    try:
+        document = validate_voices_document({"voices": voices})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        write_voices_document(VOICES_PATH, document)
+    except OSError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    await asyncio.to_thread(_reload_voices_locked)
+    payload = _voices_ui_payload()
+    payload["voices"] = public_voice_names(voice_index, voice_overlays, catalog)
     payload["default"] = default_voice
     return payload
 
@@ -526,7 +625,7 @@ def health():
         return {"ok": False, "error": ready_error or "loading"}
     payload = {
         "ok": True,
-        "voices": public_voice_names(voice_index, voice_overlays),
+        "voices": public_voice_names(voice_index, voice_overlays, catalog),
         "default": default_voice,
         "device": DEVICE,
         "dtype": DTYPE_NAME,
@@ -549,14 +648,14 @@ def health():
 def openai_voices(model: str | None = None):
     if model and not is_public_model_request(model, MODEL_NAME) and model not in catalog_ids():
         raise HTTPException(status_code=400, detail=f"unknown model {model!r}")
-    names = public_voice_names(voice_index, voice_overlays)
+    names = public_voice_names(voice_index, voice_overlays, catalog)
     return {
         "object": "list",
         "data": [
             {
                 "voice_id": n,
                 "name": n,
-                "kind": kind_by.get(voice_index.get(n.lower(), ("", ""))[0], "custom_voice"),
+                "kind": overlay_kind(n, voice_overlays) or kind_by.get(voice_index.get(n.lower(), ("", ""))[0], "custom_voice"),
                 "instructions": overlay_instructions(n, voice_overlays) or None,
             }
             for n in names
@@ -592,8 +691,95 @@ async def unhandled(request: Request, exc: Exception):
 
 
 
-def _generate_audio(eng, model_id: str, text: str, speaker: str, language: str, instruct: str | None):
-    kind = kind_by.get(model_id) or checkpoint_kind(_catalog_path(model_id))
+CLONE_WAV_MAX = 50 * 1024 * 1024
+_WAV_TYPES = {"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"}
+
+
+def _safe_alias(name: str) -> str:
+    cleaned = "".join(ch for ch in (name or "") if ch.isalnum() or ch in "._-")
+    return cleaned[:64]
+
+
+def _is_wav_upload(filename: str, content_type: str, raw: bytes) -> bool:
+    name = (filename or "").lower()
+    ctype = (content_type or "").split(";", 1)[0].strip().lower()
+    if name.endswith(".wav") or name.endswith(".wave") or ctype in _WAV_TYPES:
+        return True
+    return raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"
+
+
+async def _read_clone_wav(upload) -> bytes:
+    filename = getattr(upload, "filename", "") or ""
+    content_type = getattr(upload, "content_type", "") or ""
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    raw = await upload.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    if len(raw) > CLONE_WAV_MAX:
+        raise HTTPException(status_code=400, detail="clone wav must be 50MB or smaller")
+    if not _is_wav_upload(filename, content_type, raw):
+        raise HTTPException(status_code=400, detail="clone requires a wav file")
+    return raw
+
+
+def _path_under(path: Path, root: Path) -> bool:
+    try:
+        return path.is_relative_to(root)
+    except AttributeError:
+        try:
+            return os.path.commonpath([str(path), str(root)]) == str(root)
+        except ValueError:
+            return False
+
+
+def _resolve_ref_wav(rel: str) -> Path | None:
+    rel = (rel or "").strip()
+    if not rel:
+        return None
+    candidate = Path(rel)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    root = VOICES_PATH.parent.resolve()
+    path = (VOICES_PATH.parent / rel).resolve()
+    if not path.is_file() or path.suffix.lower() != ".wav":
+        return None
+    if not _path_under(path, root):
+        return None
+    return path
+
+
+def _unique_base_id() -> str | None:
+    bases = [i for i, p in catalog if (kind_by.get(i) or checkpoint_kind(p)) == "base"]
+    if len(bases) == 1:
+        return bases[0]
+    return None
+
+
+def _model_kind(model_id: str) -> str:
+    return kind_by.get(model_id) or checkpoint_kind(_catalog_path(model_id))
+
+
+def _generate_audio(
+    eng,
+    model_id: str,
+    text: str,
+    speaker: str,
+    language: str,
+    instruct: str | None,
+    ref_audio: str | None = None,
+    ref_text: str | None = None,
+):
+    ra = (ref_audio or "").strip()
+    rt = (ref_text or "").strip()
+    if ra and rt:
+        if not hasattr(eng, "generate_voice_clone"):
+            raise HTTPException(status_code=503, detail="qwen-tts build has no generate_voice_clone")
+        kind = _model_kind(model_id)
+        if kind != "base":
+            raise HTTPException(status_code=400, detail="voice clone requires a base checkpoint")
+        return eng.generate_voice_clone(text=text, language=language, ref_audio=ra, ref_text=rt)
+    kind = _model_kind(model_id)
     if kind == "voice_design":
         desc = (instruct or "").strip()
         if not desc:
@@ -604,7 +790,16 @@ def _generate_audio(eng, model_id: str, text: str, speaker: str, language: str, 
     return eng.generate_custom_voice(text=text, speaker=speaker, language=language, instruct=instruct)
 
 
-def _run_speech(pin_model: str | None, voice: str, instructions: str | None, text: str, language: str, fmt: str):
+def _run_speech(
+    pin_model: str | None,
+    voice: str,
+    instructions: str | None,
+    text: str,
+    language: str,
+    fmt: str,
+    ref_audio: str | None,
+    ref_text: str | None,
+):
     with lock:
         if pin_model:
             mid = pin_model
@@ -623,7 +818,29 @@ def _run_speech(pin_model: str | None, voice: str, instructions: str | None, tex
             if not mid:
                 raise HTTPException(status_code=503, detail="no voices")
             eng = _ensure_engine(mid)
-        used = public_voice_id(mid, speaker)
+        shot_a = (ref_audio or "").strip()
+        shot_t = (ref_text or "").strip()
+        if bool(shot_a) ^ bool(shot_t):
+            raise HTTPException(status_code=400, detail="clone requires ref_audio and ref_text")
+        okind = overlay_kind(voice, voice_overlays)
+        if shot_a and shot_t:
+            ref_audio, ref_text = shot_a, shot_t
+        elif okind == "voice_clone":
+            rel, rtext = overlay_clone_ref(voice, voice_overlays)
+            wav = _resolve_ref_wav(rel)
+            if wav is None:
+                raise HTTPException(status_code=400, detail="clone preset missing wav")
+            ref_audio, ref_text = str(wav), rtext
+            if _model_kind(mid) != "base":
+                mid2 = _unique_base_id()
+                if mid2 is None:
+                    raise HTTPException(status_code=400, detail="voice clone requires a base checkpoint")
+                mid = mid2
+                eng = _ensure_engine(mid)
+        else:
+            ref_audio, ref_text = None, None
+        clone = bool((ref_audio or "").strip() and (ref_text or "").strip())
+        used = (voice.strip() or "clone") if clone else public_voice_id(mid, speaker)
         print(
             f"speech public={MODEL_NAME} model={mid} voice={voice!r} -> {used} "
             f"format={fmt} chars={len(text)} fallback={fell_back}",
@@ -631,16 +848,81 @@ def _run_speech(pin_model: str | None, voice: str, instructions: str | None, tex
         )
         preset = overlay_instructions(voice, voice_overlays)
         instruct = merge_instructions(preset, instructions)
-        wavs, sr = _generate_audio(eng, mid, text, speaker, language, instruct)
+        wavs, sr = _generate_audio(eng, mid, text, speaker, language, instruct, ref_audio, ref_text)
         audio = np.asarray(wavs[0], dtype=np.float32)
     body, media = encode_audio(audio, sr, fmt)
     return mid, used, fell_back, reason, body, media
 
 
+def _speech_response(mid, used, fell_back, reason, body, media):
+    headers = {"X-TTS-Voice-Used": used, "X-TTS-Model": mid}
+    if fell_back:
+        headers["X-TTS-Fell-Back"] = "1"
+        headers["X-TTS-Fell-Back-Reason"] = reason
+    return Response(content=body, media_type=media, headers=headers)
+
+
+def _pin_base_model(requested: str | None) -> str | None:
+    if requested and requested in catalog_ids() and _model_kind(requested) == "base":
+        return requested
+    return _unique_base_id()
+
+
+async def _openai_speech_multipart(request: Request):
+    form = await request.form()
+    text = str(form.get("input") or form.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty input")
+    voice = str(form.get("voice") or "")
+    model = str(form.get("model") or "")
+    language = str(form.get("language") or DEFAULT_LANGUAGE)
+    fmt = str(form.get("response_format") or "mp3").lower().strip()
+    instructions = form.get("instructions")
+    instructions = str(instructions) if instructions is not None else None
+    ref_text = str(form.get("ref_text") or "").strip()
+    upload = form.get("ref_audio")
+    if upload is None or not hasattr(upload, "read") or not ref_text:
+        raise HTTPException(status_code=400, detail="clone requires ref_audio and ref_text")
+    raw = await _read_clone_wav(upload)
+    tmp_dir = CLONES_DIR if CLONES_DIR.parent.is_dir() else Path(tempfile.gettempdir())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=str(tmp_dir))
+    try:
+        tmp.write(raw)
+        tmp.close()
+        pin = _pin_base_model(model if model in catalog_ids() else None)
+        if pin is None:
+            raise HTTPException(status_code=400, detail="voice clone requires a base checkpoint")
+        mid, used, fell_back, reason, body, media = await asyncio.to_thread(
+            _run_speech,
+            pin,
+            voice,
+            instructions,
+            text,
+            language,
+            fmt,
+            tmp.name,
+            ref_text,
+        )
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return _speech_response(mid, used, fell_back, reason, body, media)
+
+
 @app.post("/v1/audio/speech")
-async def openai_speech(request: Request, req: OpenAISpeechRequest):
+async def openai_speech(request: Request):
     if not catalog:
         raise HTTPException(status_code=503, detail=ready_error or "loading")
+    ct = (request.headers.get("content-type") or "").lower()
+    if ct.startswith("multipart/form-data"):
+        return await _openai_speech_multipart(request)
+    try:
+        req = OpenAISpeechRequest.model_validate(await request.json())
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
     if req.model and not is_public_model_request(req.model, MODEL_NAME) and req.model not in catalog_ids():
         raise HTTPException(status_code=400, detail=f"unknown model {req.model!r}")
     text = (req.input or req.text or "").strip()
@@ -658,6 +940,8 @@ async def openai_speech(request: Request, req: OpenAISpeechRequest):
             text,
             language,
             fmt,
+            None,
+            None,
         )
     except HTTPException:
         raise

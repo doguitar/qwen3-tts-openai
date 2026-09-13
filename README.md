@@ -16,7 +16,9 @@ Mount checkpoints at `/models`. The `voice` field is `{folder}-{speaker}` (for e
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/` | Generator UI (voice dropdown, in-page MP3, download) |
+| `GET` | `/` | Speakers UI |
+| `GET` | `/design` | Voice Design generate |
+| `GET` | `/clone` | One-shot voice clone |
 | `GET` | `/config` | `voices.json` editor |
 | `POST` | `/ui/rescan` | Re-read checkpoints and `voices.json` |
 | `GET` | `/health` | Status, public voices, device |
@@ -33,7 +35,7 @@ curl http://HOST:8080/v1/audio/speech \
   --output out.mp3
 ```
 
-Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`. Voice Design checkpoints (`tts_model_type` `voice_design`) need a non-empty instruction (preset and/or request); the server calls `generate_voice_design` and does not use `speaker`.
+Optional JSON fields: `instructions`, `language`, `response_format` (`mp3`, `wav`, `pcm`, `opus`, `aac`, `flac`). OpenAI stock voice names fall back to `TTS_DEFAULT_VOICE`. Voice Design checkpoints (`tts_model_type` `voice_design`) need a non-empty instruction (preset and/or request); the server calls `generate_voice_design` and does not use `speaker`. Base checkpoints (`tts_model_type` `base`) use `generate_voice_clone` with `ref_audio` and `ref_text`. A clone preset in `voices.json` is `kind` `voice_clone` plus those fields; `/config` uploads the wav to `clones/{alias}.wav` next to `voices.json`. One-shot clone is `POST /v1/audio/speech` multipart from `/clone`.
 
 API errors log the request body.
 

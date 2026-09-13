@@ -116,6 +116,44 @@ class ValidateVoicesDocumentTests(unittest.TestCase):
         )
         self.assertNotIn("instructions", out["voices"]["n"])
 
+    def test_accepts_clone_object(self):
+        out = validate_voices_document(
+            {
+                "voices": {
+                    "jane": {
+                        "kind": "voice_clone",
+                        "ref_audio": "  clones/jane.wav  ",
+                        "ref_text": "  Hello there.  ",
+                    }
+                }
+            }
+        )
+        self.assertEqual(
+            out["voices"]["jane"],
+            {
+                "kind": "voice_clone",
+                "ref_audio": "clones/jane.wav",
+                "ref_text": "Hello there.",
+            },
+        )
+
+    def test_rejects_clone_missing_fields(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_voices_document(
+                {"voices": {"jane": {"kind": "voice_clone", "ref_audio": "clones/jane.wav"}}}
+            )
+        self.assertIn("clone requires ref_text", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            validate_voices_document(
+                {"voices": {"jane": {"kind": "voice_clone", "ref_text": "Hello."}}}
+            )
+        self.assertIn("clone requires ref_audio", str(ctx.exception))
+
+    def test_rejects_unknown_kind(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_voices_document({"voices": {"n": {"kind": "nope", "speaker": "alice"}}})
+        self.assertIn("unknown kind", str(ctx.exception))
+
 
 class WriteVoicesDocumentTests(unittest.TestCase):
     def test_round_trip(self):
@@ -126,6 +164,11 @@ class WriteVoicesDocumentTests(unittest.TestCase):
                 "narrator": {
                     "speaker": "alpha-alice",
                     "instructions": "Male 40s",
+                },
+                "jane": {
+                    "kind": "voice_clone",
+                    "ref_audio": "clones/jane.wav",
+                    "ref_text": "Hello there.",
                 },
             }
         }

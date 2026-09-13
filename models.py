@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 WEIGHT_NAMES = ("model.safetensors", "pytorch_model.bin", "model.pth", "model.pt")
 _ALLOWED_POLICIES = frozenset({"lazy", "one", "all"})
@@ -105,31 +106,50 @@ def checkpoint_kind(path: Path) -> str:
     return (raw or "").strip().lower() or "custom_voice"
 
 
+class VoiceOverlay(NamedTuple):
+    alias: str
+    speaker: str
+    model: str | None
+    instructions: str
+    kind: str
+    ref_audio: str
+    ref_text: str
+
+
 def parse_voice_overlays(
     data: object | None, env_speakers: str
-) -> list[tuple[str, str, str | None, str]]:
-    """Return (alias, speaker, model_or_None, preset) from voices.json + TTS_SPEAKERS."""
-    out: list[tuple[str, str, str | None, str]] = []
+) -> list[VoiceOverlay]:
+    """Return overlays from voices.json + TTS_SPEAKERS."""
+    out: list[VoiceOverlay] = []
     if isinstance(data, dict):
         voices = data.get("voices", data)
         if isinstance(voices, dict):
             for name, spec in voices.items():
                 if isinstance(spec, str):
-                    out.append((str(name), spec, None, ""))
+                    out.append(VoiceOverlay(str(name), spec, None, "", "", "", ""))
                 elif isinstance(spec, dict):
                     speaker = str(spec.get("speaker") or spec.get("name") or name)
                     model = spec.get("model")
                     model_id = str(model).strip() if model else None
                     raw_preset = spec.get("instructions")
                     preset = raw_preset.strip() if isinstance(raw_preset, str) else ""
-                    out.append((str(name), speaker, model_id or None, preset))
+                    kind_raw = spec.get("kind")
+                    kind = kind_raw.strip().lower() if isinstance(kind_raw, str) else ""
+                    ref_audio = spec.get("ref_audio").strip() if isinstance(spec.get("ref_audio"), str) else ""
+                    ref_text = spec.get("ref_text").strip() if isinstance(spec.get("ref_text"), str) else ""
+                    if kind == "voice_clone" or ref_audio or ref_text:
+                        kind = "voice_clone"
+                        speaker = str(spec.get("speaker") or "")
+                    out.append(
+                        VoiceOverlay(str(name), speaker, model_id or None, preset, kind, ref_audio, ref_text)
+                    )
         elif isinstance(voices, list):
             for name in voices:
-                out.append((str(name), str(name), None, ""))
+                out.append(VoiceOverlay(str(name), str(name), None, "", "", "", ""))
     for name in (env_speakers or "").split(","):
         name = name.strip()
         if name:
-            out.append((name, name, None, ""))
+            out.append(VoiceOverlay(name, name, None, "", "", "", ""))
     return out
 
 
@@ -177,10 +197,45 @@ def validate_voices_document(data: object) -> dict:
             normalized[key] = spec
             continue
         if isinstance(spec, dict):
+            kind_raw = spec.get("kind")
+            kind = kind_raw.strip().lower() if isinstance(kind_raw, str) else ""
+            if kind and kind != "voice_clone":
+                raise ValueError(f"{key}: unknown kind")
+            is_clone = kind == "voice_clone" or "ref_audio" in spec or "ref_text" in spec
+            if is_clone:
+                audio_raw = spec.get("ref_audio")
+                text_raw = spec.get("ref_text")
+                if not isinstance(audio_raw, str) or not audio_raw.strip():
+                    raise ValueError(f"{key}: clone requires ref_audio")
+                if not isinstance(text_raw, str) or not text_raw.strip():
+                    raise ValueError(f"{key}: clone requires ref_text")
+                entry: dict[str, str] = {
+                    "kind": "voice_clone",
+                    "ref_audio": audio_raw.strip(),
+                    "ref_text": text_raw.strip(),
+                }
+                speaker = spec.get("speaker")
+                if isinstance(speaker, str) and speaker.strip():
+                    entry["speaker"] = speaker
+                model = spec.get("model")
+                if model is not None:
+                    if not isinstance(model, str):
+                        raise ValueError(f"{key}: model must be a string")
+                    if model.strip():
+                        entry["model"] = model
+                if "instructions" in spec:
+                    instructions = spec.get("instructions")
+                    if not isinstance(instructions, str):
+                        raise ValueError(f"{key}: instructions must be a string")
+                    stripped = instructions.strip()
+                    if stripped:
+                        entry["instructions"] = stripped
+                normalized[key] = entry
+                continue
             speaker = spec.get("speaker")
             if not isinstance(speaker, str) or not speaker.strip():
                 raise ValueError(f"{key}: speaker must be a non-empty string")
-            entry: dict[str, str] = {"speaker": speaker}
+            entry = {"speaker": speaker}
             model = spec.get("model")
             if model is not None:
                 if not isinstance(model, str):
@@ -264,27 +319,45 @@ def merge_instructions(preset: str | None, extra: str | None) -> str | None:
     return None
 
 
-def overlay_instructions(
-    name: str, overlays: list[tuple[str, str, str | None, str]]
-) -> str:
+def overlay_instructions(name: str, overlays: list[VoiceOverlay]) -> str:
     key = (name or "").strip().lower()
     preset = ""
-    for alias, _speaker, _hint, item_preset in overlays:
-        if alias.strip().lower() == key:
-            preset = item_preset
+    for item in overlays:
+        if item.alias.strip().lower() == key:
+            preset = item.instructions
     return preset
+
+
+def overlay_kind(name: str, overlays: list[VoiceOverlay]) -> str:
+    key = (name or "").strip().lower()
+    kind = ""
+    for item in overlays:
+        if item.alias.strip().lower() == key:
+            kind = item.kind
+    return kind
+
+
+def overlay_clone_ref(name: str, overlays: list[VoiceOverlay]) -> tuple[str, str]:
+    key = (name or "").strip().lower()
+    ref = ("", "")
+    for item in overlays:
+        if item.alias.strip().lower() == key:
+            ref = (item.ref_audio, item.ref_text)
+    return ref
 
 
 def build_voice_index(
     catalog: list[tuple[str, Path]],
-    overlays: list[tuple[str, str, str | None, str]],
+    overlays: list[VoiceOverlay],
     default_id: str,
 ) -> dict[str, tuple[str, str]]:
     """Map lowercased public voice id -> (checkpoint id, speaker). Canonical id is `{model}-{speaker}`."""
     index: dict[str, tuple[str, str]] = {}
     ids = [i for i, _ in catalog]
     for model_id, path in catalog:
-        names = checkpoint_speakers(path) or [model_id]
+        names = checkpoint_speakers(path)
+        if not names:
+            names = [] if checkpoint_kind(path) == "base" else [model_id]
         for name in names:
             index[public_voice_id(model_id, name).lower()] = (model_id, name)
     pairs = _unique_pairs(index)
@@ -292,13 +365,21 @@ def build_voice_index(
     for mid, name in pairs:
         if mid.lower() == name.lower() and speaker_counts[name.lower()] == 1:
             index.setdefault(name.lower(), (mid, name))
-    for alias, speaker, model_hint, _preset in overlays:
-        resolved = resolve_overlay_target(speaker, model_hint, index, ids, default_id)
+    for item in overlays:
+        if item.kind == "voice_clone":
+            bases = [i for i, p in catalog if checkpoint_kind(p) == "base"]
+            mid = item.model if item.model in bases else (bases[0] if len(bases) == 1 else None)
+            if mid is None:
+                continue
+            if item.alias.strip():
+                index[item.alias.strip().lower()] = (mid, item.alias.strip())
+            continue
+        resolved = resolve_overlay_target(item.speaker, item.model, index, ids, default_id)
         if resolved is None:
             continue
         mid, real = resolved
-        if alias.strip():
-            index[alias.strip().lower()] = (mid, real)
+        if item.alias.strip():
+            index[item.alias.strip().lower()] = (mid, real)
     return index
 
 
@@ -322,13 +403,13 @@ def _speaker_counts(pairs: list[tuple[str, str]]) -> dict[str, int]:
 
 def _aliases_by_pair(
     index: dict[str, tuple[str, str]],
-    overlays: list[tuple[str, str, str | None, str]] | None,
+    overlays: list[VoiceOverlay] | None,
 ) -> dict[tuple[str, str], list[str]]:
     grouped: dict[tuple[str, str], list[str]] = {}
     if not overlays:
         return grouped
-    for alias, _speaker, _hint, _preset in overlays:
-        name = alias.strip()
+    for item in overlays:
+        name = item.alias.strip()
         if not name:
             continue
         pair = index.get(name.lower())
@@ -355,14 +436,24 @@ def _listed_name_for_pair(
 
 def public_voice_names(
     index: dict[str, tuple[str, str]],
-    overlays: list[tuple[str, str, str | None, str]] | None = None,
+    overlays: list[VoiceOverlay] | None = None,
+    catalog: list[tuple[str, Path]] | None = None,
 ) -> list[str]:
     pairs = _unique_pairs(index)
     speaker_counts = _speaker_counts(pairs)
     aliases = _aliases_by_pair(index, overlays)
+    kind_by_mid = {mid: checkpoint_kind(path) for mid, path in catalog} if catalog is not None else {}
     labels: dict[str, str] = {}
     for mid, speaker in pairs:
-        names = aliases.get((mid, speaker))
+        pair = (mid, speaker)
+        if (
+            catalog is not None
+            and kind_by_mid.get(mid) == "base"
+            and speaker.lower() == mid.lower()
+            and pair not in aliases
+        ):
+            continue
+        names = aliases.get(pair)
         if names:
             for name in names:
                 labels[name.lower()] = name
@@ -379,7 +470,7 @@ def public_default_voice(
     index: dict[str, tuple[str, str]],
     requested: str,
     catalog_ids: list[str],
-    overlays: list[tuple[str, str, str | None, str]] | None = None,
+    overlays: list[VoiceOverlay] | None = None,
 ) -> str:
     listed = public_voice_names(index, overlays)
     if not listed:
